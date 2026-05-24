@@ -1,4 +1,5 @@
 from app.models.entities import (
+    AuditLog,
     Bar,
     BarAssignment,
     BarStock,
@@ -15,6 +16,7 @@ from app.models.entities import (
 
 __all__ = [
     "Bar",
+    "AuditLog",
     "BarAssignment",
     "BarStock",
     "BartenderSale",

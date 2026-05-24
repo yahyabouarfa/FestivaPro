@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from random import shuffle
 from typing import Annotated
@@ -9,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import DbSession, require_admin
 from app.core.security import hash_password
 from app.models import (
+    AuditLog,
     Bar,
     BarStock,
     BartenderSale,
@@ -24,6 +26,7 @@ from app.schemas.common import ApiMessage, MoneySummary
 from app.schemas.operations import (
     AssignmentCreate,
     AssignmentRead,
+    AuditLogRead,
     BarCreate,
     BarFinancialSummary,
     BarRead,
@@ -86,6 +89,18 @@ def require_employee(db: DbSession, user_id: int) -> User:
     if user.role != "employee":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only employees can be assigned to bars.")
     return user
+
+
+def log_audit(db: DbSession, user: User, action: str, entity_type: str, entity_id: int | None, details: dict | None = None) -> None:
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            details=json.dumps(details or {}, default=str),
+        )
+    )
 
 
 def latest_assignment_ids(db: DbSession, event_id: int | None = None):
@@ -360,6 +375,7 @@ def upsert_event_stock(payload: EventStockUpsert, db: DbSession, current_user: A
                 changed_by_id=current_user.id,
             )
         )
+        log_audit(db, current_user, "create_price", "event_stock", stock.id, payload.model_dump())
     else:
         old_price = stock.selling_price_per_unit
         apply_updates(stock, payload)
@@ -374,6 +390,7 @@ def upsert_event_stock(payload: EventStockUpsert, db: DbSession, current_user: A
                     changed_by_id=current_user.id,
                 )
             )
+        log_audit(db, current_user, "update_price", "event_stock", stock.id, {"old_selling_price": old_price, **payload.model_dump()})
     commit_or_409(db)
     db.refresh(stock)
     return stock
@@ -389,26 +406,33 @@ def list_price_history(db: DbSession, _: AdminUser, event_id: int | None = None,
     return query.all()
 
 
+@router.get("/audit-logs", response_model=list[AuditLogRead])
+def list_audit_logs(db: DbSession, _: AdminUser, limit: int = Query(default=50, ge=1, le=500)):
+    return db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all()
+
+
 @router.get("/assignments", response_model=list[AssignmentRead])
 def list_assignments(db: DbSession, _: AdminUser, event_id: int | None = None, user_id: int | None = None):
     return current_assignment_query(db, event_id=event_id, user_id=user_id).order_by(EventSalary.created_at.desc()).all()
 
 
 @router.post("/assignments", response_model=AssignmentRead, status_code=status.HTTP_201_CREATED)
-def create_assignment(payload: AssignmentCreate, db: DbSession, _: AdminUser):
+def create_assignment(payload: AssignmentCreate, db: DbSession, current_user: AdminUser):
     validate_assignment(db, payload.event_id, payload.bar_id, payload.user_id)
     current = current_assignment_query(db, event_id=payload.event_id, user_id=payload.user_id).first()
     if current and current.bar_id == payload.bar_id and current.salary_amount == payload.salary_amount:
         return current
     assignment = EventSalary(**payload.model_dump())
     db.add(assignment)
+    db.flush()
+    log_audit(db, current_user, "assign_staff", "event_salaries", assignment.id, payload.model_dump())
     commit_or_409(db)
     db.refresh(assignment)
     return assignment
 
 
 @router.post("/assignments/random", response_model=list[AssignmentRead])
-def random_assignments(payload: RandomAssignmentRequest, db: DbSession, _: AdminUser):
+def random_assignments(payload: RandomAssignmentRequest, db: DbSession, current_user: AdminUser):
     event = get_or_404(db, Event, payload.event_id)
     if event.status == "closed":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Closed events cannot be reassigned.")
@@ -429,6 +453,7 @@ def random_assignments(payload: RandomAssignmentRequest, db: DbSession, _: Admin
         assignment = EventSalary(event_id=payload.event_id, user_id=employee.id, bar_id=bar.id, salary_amount=payload.salary_amount)
         db.add(assignment)
         saved.append(assignment)
+    log_audit(db, current_user, "random_assign_staff", "events", payload.event_id, {"employee_count": len(employees), "bar_count": len(bars)})
     commit_or_409(db)
     return saved
 
@@ -442,7 +467,7 @@ def list_stock(db: DbSession, _: AdminUser, bar_id: int | None = None):
 
 
 @router.post("/stock", response_model=StockRead)
-def upsert_stock(payload: StockUpsert, db: DbSession, _: AdminUser):
+def upsert_stock(payload: StockUpsert, db: DbSession, current_user: AdminUser):
     bar = get_or_404(db, Bar, payload.bar_id)
     get_or_404(db, Product, payload.product_id)
     event_stock = db.query(EventStock).filter(EventStock.event_id == bar.event_id, EventStock.product_id == payload.product_id).first()
@@ -457,6 +482,8 @@ def upsert_stock(payload: StockUpsert, db: DbSession, _: AdminUser):
     else:
         stock.quantity_allocated = payload.quantity_allocated
         stock.quantity_remaining = payload.quantity_remaining
+    db.flush()
+    log_audit(db, current_user, "edit_stock", "bar_stock", stock.id, payload.model_dump())
     commit_or_409(db)
     db.refresh(stock)
     return stock
@@ -473,7 +500,7 @@ def list_bartender_sales(db: DbSession, _: AdminUser, event_id: int | None = Non
 
 
 @router.post("/end-of-night", response_model=EndOfNightResult)
-def record_end_of_night(payload: EndOfNightInput, db: DbSession, _: AdminUser):
+def record_end_of_night(payload: EndOfNightInput, db: DbSession, current_user: AdminUser):
     bar = get_or_404(db, Bar, payload.bar_id)
     if bar.event_id != payload.event_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Bar does not belong to the selected event.")
@@ -487,6 +514,7 @@ def record_end_of_night(payload: EndOfNightInput, db: DbSession, _: AdminUser):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Remaining quantity cannot exceed allocated quantity.")
         stock.quantity_remaining = item.quantity_remaining
         updated_stock.append(stock)
+    log_audit(db, current_user, "end_of_night", "bars", payload.bar_id, {"event_id": payload.event_id, "stock_items": len(payload.stock_items), "bartender_sales": len(payload.bartender_sales)})
 
     db.flush()
     bar_revenue = next((money(row["gross_revenue"]) for row in bar_financial_rows(db, payload.event_id) if row["bar_id"] == payload.bar_id), Decimal(0))

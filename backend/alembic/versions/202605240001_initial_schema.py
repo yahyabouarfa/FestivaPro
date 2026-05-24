@@ -60,6 +60,7 @@ def upgrade() -> None:
         sa.Column("start_time", sa.Time(), nullable=False),
         sa.Column("end_time", sa.Time(), nullable=False),
         sa.Column("status", sa.String(length=20), nullable=False),
+        sa.Column("attendance_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_by", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint("status IN ('upcoming', 'active', 'closed')", name="ck_events_status"),
@@ -123,6 +124,22 @@ def upgrade() -> None:
     op.create_index(op.f("ix_bar_assignments_user_id"), "bar_assignments", ["user_id"], unique=False)
 
     op.create_table(
+        "event_salaries",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("event_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("bar_id", sa.Integer(), nullable=False),
+        sa.Column("salary_amount", sa.Numeric(10, 2), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.ForeignKeyConstraint(["bar_id"], ["bars.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["event_id"], ["events.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_event_salaries_event_user_created", "event_salaries", ["event_id", "user_id", "created_at"], unique=False)
+    op.create_index("ix_event_salaries_event_bar", "event_salaries", ["event_id", "bar_id"], unique=False)
+
+    op.create_table(
         "event_stock",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("event_id", sa.Integer(), nullable=False),
@@ -155,6 +172,60 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_bar_stock_bar_id"), "bar_stock", ["bar_id"], unique=False)
     op.create_index(op.f("ix_bar_stock_product_id"), "bar_stock", ["product_id"], unique=False)
+
+    op.create_table(
+        "bartender_sales",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("event_id", sa.Integer(), nullable=False),
+        sa.Column("bar_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("units_sold", sa.Numeric(10, 2), nullable=False, server_default="0"),
+        sa.Column("sales_amount", sa.Numeric(10, 2), nullable=False, server_default="0"),
+        sa.Column("contribution_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
+        sa.Column("recorded_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.ForeignKeyConstraint(["bar_id"], ["bars.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["event_id"], ["events.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("event_id", "bar_id", "user_id", name="uq_bartender_sales_event_bar_user"),
+    )
+    op.create_index("ix_bartender_sales_event_user", "bartender_sales", ["event_id", "user_id"], unique=False)
+
+    op.create_table(
+        "price_history",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("event_stock_id", sa.Integer(), nullable=False),
+        sa.Column("event_id", sa.Integer(), nullable=False),
+        sa.Column("product_id", sa.Integer(), nullable=False),
+        sa.Column("old_selling_price", sa.Numeric(10, 2), nullable=True),
+        sa.Column("new_selling_price", sa.Numeric(10, 2), nullable=False),
+        sa.Column("changed_by_id", sa.Integer(), nullable=True),
+        sa.Column("changed_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.ForeignKeyConstraint(["changed_by_id"], ["users.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["event_id"], ["events.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["event_stock_id"], ["event_stock.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["product_id"], ["products.id"], ondelete="RESTRICT"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(op.f("ix_price_history_event_stock_id"), "price_history", ["event_stock_id"], unique=False)
+    op.create_index(op.f("ix_price_history_event_id"), "price_history", ["event_id"], unique=False)
+    op.create_index(op.f("ix_price_history_product_id"), "price_history", ["product_id"], unique=False)
+    op.create_index(op.f("ix_price_history_changed_by_id"), "price_history", ["changed_by_id"], unique=False)
+
+    op.create_table(
+        "audit_logs",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=True),
+        sa.Column("action", sa.String(length=80), nullable=False),
+        sa.Column("entity_type", sa.String(length=80), nullable=False),
+        sa.Column("entity_id", sa.Integer(), nullable=True),
+        sa.Column("details", sa.Text(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(op.f("ix_audit_logs_user_id"), "audit_logs", ["user_id"], unique=False)
+    op.create_index(op.f("ix_audit_logs_entity_id"), "audit_logs", ["entity_id"], unique=False)
 
     op.execute(
         """
@@ -201,6 +272,7 @@ def seed_data() -> None:
         sa.column("start_time", sa.Time),
         sa.column("end_time", sa.Time),
         sa.column("status", sa.String),
+        sa.column("attendance_count", sa.Integer),
         sa.column("created_by", sa.Integer),
     )
     categories = sa.table("product_categories", sa.column("id", sa.Integer), sa.column("name", sa.String))
@@ -219,6 +291,24 @@ def seed_data() -> None:
         sa.column("responsible_user_id", sa.Integer),
     )
     assignments = sa.table("bar_assignments", sa.column("id", sa.Integer), sa.column("bar_id", sa.Integer), sa.column("user_id", sa.Integer))
+    salaries = sa.table(
+        "event_salaries",
+        sa.column("id", sa.Integer),
+        sa.column("event_id", sa.Integer),
+        sa.column("bar_id", sa.Integer),
+        sa.column("user_id", sa.Integer),
+        sa.column("salary_amount", sa.Numeric),
+    )
+    bartender_sales = sa.table(
+        "bartender_sales",
+        sa.column("id", sa.Integer),
+        sa.column("event_id", sa.Integer),
+        sa.column("bar_id", sa.Integer),
+        sa.column("user_id", sa.Integer),
+        sa.column("units_sold", sa.Numeric),
+        sa.column("sales_amount", sa.Numeric),
+        sa.column("contribution_pct", sa.Numeric),
+    )
     event_stock = sa.table(
         "event_stock",
         sa.column("id", sa.Integer),
@@ -279,11 +369,11 @@ def seed_data() -> None:
     op.bulk_insert(
         events,
         [
-            {"id": 1, "name": "Casa Nights Festival", "location": "Casablanca", "event_date": date(2026, 6, 5), "start_time": time(18, 0), "end_time": time(2, 0), "status": "upcoming", "created_by": 1},
-            {"id": 2, "name": "Marrakech Desert Beats", "location": "Marrakech", "event_date": date(2026, 6, 12), "start_time": time(19, 0), "end_time": time(3, 0), "status": "upcoming", "created_by": 1},
-            {"id": 3, "name": "Agadir Beach Sessions", "location": "Agadir", "event_date": date(2026, 6, 19), "start_time": time(17, 30), "end_time": time(1, 30), "status": "upcoming", "created_by": 1},
-            {"id": 4, "name": "Rabat Stage Live", "location": "Rabat", "event_date": date(2026, 6, 26), "start_time": time(18, 30), "end_time": time(2, 30), "status": "upcoming", "created_by": 1},
-            {"id": 5, "name": "Tanger Harbor Sound", "location": "Tanger", "event_date": date(2026, 7, 3), "start_time": time(19, 30), "end_time": time(3, 30), "status": "upcoming", "created_by": 1},
+            {"id": 1, "name": "Casa Nights Festival", "location": "Casablanca", "event_date": date(2026, 6, 5), "start_time": time(18, 0), "end_time": time(2, 0), "status": "upcoming", "attendance_count": 1800, "created_by": 1},
+            {"id": 2, "name": "Marrakech Desert Beats", "location": "Marrakech", "event_date": date(2026, 6, 12), "start_time": time(19, 0), "end_time": time(3, 0), "status": "upcoming", "attendance_count": 2300, "created_by": 1},
+            {"id": 3, "name": "Agadir Beach Sessions", "location": "Agadir", "event_date": date(2026, 6, 19), "start_time": time(17, 30), "end_time": time(1, 30), "status": "upcoming", "attendance_count": 1500, "created_by": 1},
+            {"id": 4, "name": "Rabat Stage Live", "location": "Rabat", "event_date": date(2026, 6, 26), "start_time": time(18, 30), "end_time": time(2, 30), "status": "upcoming", "attendance_count": 1650, "created_by": 1},
+            {"id": 5, "name": "Tanger Harbor Sound", "location": "Tanger", "event_date": date(2026, 7, 3), "start_time": time(19, 30), "end_time": time(3, 30), "status": "upcoming", "attendance_count": 2100, "created_by": 1},
         ],
     )
     op.bulk_insert(categories, [{"id": 1, "name": "Beer"}, {"id": 2, "name": "Hard Alcohol"}, {"id": 3, "name": "Soda"}, {"id": 4, "name": "Consumables"}])
@@ -321,16 +411,36 @@ def seed_data() -> None:
     op.bulk_insert(bars, bar_rows)
 
     assignment_rows = []
+    salary_rows = []
+    bartender_sale_rows = []
     assignment_id = 1
+    salary_id = 1
+    sale_id = 1
     for row in bar_rows:
         first_employee = 2 + ((row["id"] * 3) % 18)
         employee_ids = [2 + ((first_employee - 2 + offset) % 18) for offset in range(3)]
         if row["responsible_user_id"] not in employee_ids:
             employee_ids[0] = row["responsible_user_id"]
-        for employee_id in employee_ids:
+        for employee_index, employee_id in enumerate(employee_ids):
             assignment_rows.append({"id": assignment_id, "bar_id": row["id"], "user_id": employee_id})
+            salary_rows.append({"id": salary_id, "event_id": row["event_id"], "bar_id": row["id"], "user_id": employee_id, "salary_amount": Decimal("300.00") + Decimal(employee_index * 50)})
+            bartender_sale_rows.append(
+                {
+                    "id": sale_id,
+                    "event_id": row["event_id"],
+                    "bar_id": row["id"],
+                    "user_id": employee_id,
+                    "units_sold": Decimal(35 + row["id"] + employee_index * 7),
+                    "sales_amount": Decimal(2400 + row["id"] * 110 + employee_index * 420),
+                    "contribution_pct": Decimal("33.33"),
+                }
+            )
             assignment_id += 1
+            salary_id += 1
+            sale_id += 1
     op.bulk_insert(assignments, assignment_rows)
+    op.bulk_insert(salaries, salary_rows)
+    op.bulk_insert(bartender_sales, bartender_sale_rows)
 
     base_prices = {
         1: (Decimal("12.00"), Decimal("30.00")),
@@ -393,8 +503,12 @@ def seed_data() -> None:
 
 def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS bar_stock_financials")
+    op.drop_table("audit_logs")
+    op.drop_table("price_history")
+    op.drop_table("bartender_sales")
     op.drop_table("bar_stock")
     op.drop_table("event_stock")
+    op.drop_table("event_salaries")
     op.drop_table("bar_assignments")
     op.drop_table("bars")
     op.drop_table("products")

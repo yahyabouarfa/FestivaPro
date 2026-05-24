@@ -1,6 +1,6 @@
 # FestivaPro Backend
 
-FastAPI REST API for festival bar management with SQLAlchemy, JWT access tokens, persisted refresh tokens, and MySQL migrations.
+FastAPI REST API for festival bar management with SQLAlchemy, JWT access tokens, persisted refresh tokens, MySQL migrations, seeded demo data, and downloadable PDF/XLSX reports.
 
 ## Setup
 
@@ -22,6 +22,7 @@ Run migrations. The initial migration creates the full event/bar/product/stock s
 
 ```powershell
 alembic upgrade head
+python seed.py
 ```
 
 For phpMyAdmin-only setup, apply the SQL files in `../migrations/` in numeric order.
@@ -40,3 +41,5 @@ uvicorn app.main:app --reload
 ```
 
 API docs are available at `http://127.0.0.1:8000/docs`.
+
+Report downloads are exposed under `/api/admin/reports/*` and require an admin bearer token.

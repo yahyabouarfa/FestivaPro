@@ -236,6 +236,16 @@ class PriceHistoryRead(ORMModel):
     changed_at: datetime
 
 
+class AuditLogRead(ORMModel):
+    id: int
+    user_id: int | None
+    action: str
+    entity_type: str
+    entity_id: int | None
+    details: str | None
+    created_at: datetime
+
+
 class EventInsight(BaseModel):
     event_id: int
     revenue: Decimal

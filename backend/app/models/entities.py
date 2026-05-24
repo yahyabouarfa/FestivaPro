@@ -1,7 +1,7 @@
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Computed, Date, DateTime, ForeignKey, Index, Numeric, String, Time, UniqueConstraint, func
+from sqlalchemy import Boolean, Computed, Date, DateTime, ForeignKey, Index, Numeric, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -28,6 +28,7 @@ class User(Base, TimestampMixin):
     bar_assignments: Mapped[list["BarAssignment"]] = relationship(back_populates="user")
     event_salaries: Mapped[list["EventSalary"]] = relationship(back_populates="user")
     bartender_sales: Mapped[list["BartenderSale"]] = relationship(back_populates="user")
+    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
 
 
 class RefreshToken(Base, TimestampMixin):
@@ -207,3 +208,17 @@ class PriceHistory(Base):
 
     event_stock: Mapped[EventStock] = relationship(back_populates="price_history")
     changed_by: Mapped[User | None] = relationship()
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    entity_id: Mapped[int | None] = mapped_column(index=True)
+    details: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user: Mapped[User | None] = relationship(back_populates="audit_logs")

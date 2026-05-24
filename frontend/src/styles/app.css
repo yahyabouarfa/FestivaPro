@@ -1,16 +1,19 @@
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f4f6f3;
-  color: #17211b;
-  --ink: #17211b;
-  --muted: #657067;
-  --line: #dce3da;
-  --panel: #ffffff;
-  --primary: #12645b;
-  --primary-dark: #0a443d;
-  --accent: #c45334;
-  --gold: #d89c27;
+  background: #080612;
+  color: #f8f7ff;
+  --ink: #f8f7ff;
+  --muted: #b8aee0;
+  --line: #31264a;
+  --panel: #130f20;
+  --primary: #ff4fd8;
+  --primary-dark: #c92eaa;
+  --accent: #39d9ff;
+  --gold: #ffb02e;
+  --positive: #39ffb6;
+  --negative: #ff476f;
+  --warning: #ffd166;
 }
 
 * {
@@ -20,6 +23,10 @@
 body {
   margin: 0;
   min-width: 320px;
+  background:
+    radial-gradient(circle at 16% 8%, rgba(57, 217, 255, 0.18), transparent 32%),
+    radial-gradient(circle at 86% 14%, rgba(255, 79, 216, 0.16), transparent 30%),
+    #080612;
 }
 
 button,
@@ -38,14 +45,14 @@ button {
   place-items: center;
   padding: 24px;
   background:
-    linear-gradient(135deg, rgba(18, 100, 91, 0.92), rgba(23, 33, 27, 0.84)),
+    linear-gradient(135deg, rgba(8, 6, 18, 0.92), rgba(54, 18, 86, 0.78)),
     url('/festival-login.png') center / cover;
 }
 
 .login-panel {
   width: min(430px, 100%);
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.52);
+  background: rgba(19, 15, 32, 0.94);
+  border: 1px solid rgba(57, 217, 255, 0.28);
   border-radius: 8px;
   padding: 28px;
   box-shadow: 0 22px 65px rgba(0, 0, 0, 0.24);
@@ -106,7 +113,7 @@ select {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 10px 12px;
-  background: #fff;
+  background: #0d0a18;
   color: var(--ink);
 }
 
@@ -133,14 +140,14 @@ select {
 }
 
 .secondary-button {
-  background: #eef3ef;
+  background: #211832;
   color: var(--ink);
   border: 1px solid var(--line);
 }
 
 .icon-button {
   width: 42px;
-  background: #eef3ef;
+  background: #211832;
   color: var(--ink);
   border: 1px solid var(--line);
 }
@@ -149,20 +156,64 @@ select {
 .status-pill {
   border-radius: 6px;
   padding: 10px 12px;
-  background: #fff0ea;
-  color: #8d341d;
-  border: 1px solid #f0c1b2;
+  background: rgba(255, 71, 111, 0.12);
+  color: #ffd7df;
+  border: 1px solid rgba(255, 71, 111, 0.42);
 }
 
 .status-pill {
-  background: #eef8f5;
-  color: var(--primary-dark);
-  border-color: #c8e4dd;
+  background: rgba(57, 255, 182, 0.12);
+  color: var(--positive);
+  border-color: rgba(57, 255, 182, 0.35);
+}
+
+.status-pill.warning {
+  background: rgba(255, 209, 102, 0.14);
+  border-color: rgba(255, 209, 102, 0.42);
+  color: var(--warning);
 }
 
 .app-shell {
   min-height: 100vh;
-  background: #f4f6f3;
+  background: transparent;
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  grid-template-rows: auto 1fr;
+}
+
+.sidebar {
+  grid-row: 1 / span 2;
+  min-height: 100vh;
+  padding: 20px 16px;
+  border-right: 1px solid var(--line);
+  background: rgba(11, 8, 22, 0.86);
+  position: sticky;
+  top: 0;
+}
+
+.sidebar-brand {
+  margin-bottom: 24px;
+}
+
+.side-nav {
+  display: grid;
+  gap: 6px;
+}
+
+.side-nav a {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.side-nav a:hover {
+  background: rgba(57, 217, 255, 0.11);
+  color: var(--accent);
 }
 
 .topbar {
@@ -172,7 +223,7 @@ select {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(8, 6, 18, 0.84);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -208,6 +259,7 @@ select {
   width: min(1480px, 100%);
   margin: 0 auto;
   padding: 30px clamp(16px, 4vw, 42px) 48px;
+  grid-column: 2;
 }
 
 .page-title {
@@ -233,6 +285,22 @@ select {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 16px;
+}
+
+.stat-card {
+  animation: stat-rise 520ms ease both;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.2);
+}
+
+@keyframes stat-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .metric-strip span,
@@ -265,6 +333,14 @@ select {
   display: grid;
   gap: 16px;
   align-content: start;
+}
+
+.resource-panel,
+.metric-strip div,
+.employee-summary div,
+.summary-grid span,
+.chart-panel {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 50px rgba(0, 0, 0, 0.16);
 }
 
 .panel-heading {
@@ -326,7 +402,45 @@ th {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 12px;
-  background: #fbfcfb;
+  background: #0d0a18;
+}
+
+.positive strong,
+.positive {
+  color: var(--positive);
+}
+
+.negative strong,
+.negative {
+  color: var(--negative);
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.chart-panel {
+  min-height: 300px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #0d0a18;
+}
+
+.chart-panel h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.report-actions {
+  grid-template-columns: minmax(140px, 1fr) repeat(5, auto);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .summary-grid strong {
@@ -365,6 +479,25 @@ th {
 }
 
 @media (max-width: 720px) {
+  .app-shell {
+    display: block;
+  }
+
+  .sidebar {
+    min-height: auto;
+    position: static;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .side-nav {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .side-nav a {
+    justify-content: center;
+  }
+
   .topbar {
     height: auto;
     padding-block: 12px;
@@ -384,6 +517,10 @@ th {
   }
 
   .inline-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .report-actions {
     grid-template-columns: 1fr;
   }
 

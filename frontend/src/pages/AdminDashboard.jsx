@@ -4,6 +4,7 @@ import {
   Boxes,
   CalendarDays,
   ClipboardList,
+  Download,
   Dice5,
   FolderTree,
   Package,
@@ -12,6 +13,7 @@ import {
   Store,
   UsersRound,
 } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../api/client.js';
 import ResourcePanel from '../components/ResourcePanel.jsx';
 
@@ -40,6 +42,8 @@ export default function AdminDashboard() {
   const [stock, setStock] = useState([]);
   const [bartenderSales, setBartenderSales] = useState([]);
   const [priceHistory, setPriceHistory] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [lowStock, setLowStock] = useState([]);
   const [summary, setSummary] = useState(null);
   const [insights, setInsights] = useState(null);
   const [comparison, setComparison] = useState([]);
@@ -55,14 +59,18 @@ export default function AdminDashboard() {
     stock: blankStock,
     night: blankNight,
     reportEventId: '',
+    reportBarId: '',
     randomEventId: '',
     randomSalary: '0',
   });
 
   const employees = useMemo(() => users.filter((user) => user.role === 'employee' && user.is_active), [users]);
+  const eventBars = useMemo(() => bars.filter((bar) => Number(bar.event_id) === Number(forms.reportEventId)), [bars, forms.reportEventId]);
+  const chartBars = useMemo(() => (insights?.best_sellers || []).slice(0, 8).map((item) => ({ name: item.product_name, sold: Number(item.quantity_sold || 0), revenue: Number(item.revenue || 0) })), [insights]);
+  const profitChart = useMemo(() => comparison.map((event) => ({ name: event.event_name, profit: Number(event.profit || 0), revenue: Number(event.revenue || 0) })).reverse(), [comparison]);
 
   async function loadAll() {
-    const [userRes, eventRes, barRes, categoryRes, productRes, eventStockRes, assignmentRes, stockRes, bartenderSaleRes, priceHistoryRes] = await Promise.all([
+    const [userRes, eventRes, barRes, categoryRes, productRes, eventStockRes, assignmentRes, stockRes, bartenderSaleRes, priceHistoryRes, auditRes] = await Promise.all([
       api.get('/admin/users'),
       api.get('/admin/events'),
       api.get('/admin/bars'),
@@ -73,6 +81,7 @@ export default function AdminDashboard() {
       api.get('/admin/stock'),
       api.get('/admin/bartender-sales'),
       api.get('/admin/price-history'),
+      api.get('/admin/audit-logs'),
     ]);
     setUsers(userRes.data);
     setEvents(eventRes.data);
@@ -84,11 +93,22 @@ export default function AdminDashboard() {
     setStock(stockRes.data);
     setBartenderSales(bartenderSaleRes.data);
     setPriceHistory(priceHistoryRes.data);
+    setAuditLogs(auditRes.data);
   }
 
   useEffect(() => {
     loadAll().catch((err) => setMessage(err.response?.data?.detail || 'Unable to load admin data.'));
   }, []);
+
+  useEffect(() => {
+    if (!forms.reportEventId) return undefined;
+    const timer = window.setInterval(async () => {
+      const { data } = await api.get('/admin/reports/low-stock', { params: { event_id: forms.reportEventId } });
+      setLowStock(data);
+      if (data.length) setMessage(`${data.length} low-stock alert${data.length === 1 ? '' : 's'} need attention.`);
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [forms.reportEventId]);
 
   function setForm(name, field, value) {
     setForms((current) => ({ ...current, [name]: { ...current[name], [field]: value } }));
@@ -120,14 +140,30 @@ export default function AdminDashboard() {
 
   async function loadSummary() {
     if (!forms.reportEventId) return;
-    const [summaryRes, insightsRes, comparisonRes] = await Promise.all([
+    const [summaryRes, insightsRes, comparisonRes, lowStockRes] = await Promise.all([
       api.get('/admin/reports/summary', { params: { event_id: forms.reportEventId } }),
       api.get('/admin/reports/event-insights', { params: { event_id: forms.reportEventId } }),
       api.get('/admin/reports/event-comparison'),
+      api.get('/admin/reports/low-stock', { params: { event_id: forms.reportEventId } }),
     ]);
     setSummary(summaryRes.data);
     setInsights(insightsRes.data);
     setComparison(comparisonRes.data);
+    setLowStock(lowStockRes.data);
+    if (lowStockRes.data.length) setMessage(`${lowStockRes.data.length} low-stock alert${lowStockRes.data.length === 1 ? '' : 's'} need attention.`);
+  }
+
+  async function downloadReport(path) {
+    const response = await api.get(path, { responseType: 'blob' });
+    const disposition = response.headers['content-disposition'] || '';
+    const filename = disposition.match(/filename="(.+)"/)?.[1] || 'festivapro-report';
+    const url = URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    setMessage('Report download started.');
   }
 
   async function recordNight(event) {
@@ -160,18 +196,18 @@ export default function AdminDashboard() {
           <h1>Admin command center</h1>
           <p>Events, bars, stock, prices, staffing, and night-end reporting.</p>
         </div>
-        {message && <div className="status-pill">{message}</div>}
+        {message && <div className={`status-pill ${message.includes('low-stock') ? 'warning' : ''}`}>{message}</div>}
       </div>
 
       <section className="metric-strip">
-        <div><span>{events.length}</span> Events</div>
-        <div><span>{bars.length}</span> Bars</div>
-        <div><span>{products.length}</span> Products</div>
-        <div><span>{employees.length}</span> Bartenders</div>
+        <div className="stat-card"><span>{events.length}</span> Events</div>
+        <div className="stat-card"><span>{bars.length}</span> Bars</div>
+        <div className="stat-card"><span>{products.length}</span> Products</div>
+        <div className="stat-card"><span>{employees.length}</span> Bartenders</div>
       </section>
 
       <div className="resource-grid">
-        <ResourcePanel title="Users" icon={<UsersRound size={18} />}>
+        <section id="staff"><ResourcePanel title="Users" icon={<UsersRound size={18} />}>
           <form className="compact-form" onSubmit={(event) => { event.preventDefault(); submit('user', '/admin/users', forms.user, blankUser); }}>
             <input placeholder="Full name" value={forms.user.full_name} onChange={(e) => setForm('user', 'full_name', e.target.value)} required />
             <input placeholder="Email" value={forms.user.email} onChange={(e) => setForm('user', 'email', e.target.value)} required type="email" />
@@ -184,9 +220,9 @@ export default function AdminDashboard() {
             <button className="primary-button" type="submit"><Plus size={16} />Add</button>
           </form>
           <DataTable columns={['Name', 'Role', 'Email']} rows={users.map((u) => [u.full_name, u.role, u.email])} />
-        </ResourcePanel>
+        </ResourcePanel></section>
 
-        <ResourcePanel title="Events" icon={<CalendarDays size={18} />}>
+        <section id="events"><ResourcePanel title="Events" icon={<CalendarDays size={18} />}>
           <form className="compact-form" onSubmit={(event) => { event.preventDefault(); submit('event', '/admin/events', forms.event, blankEvent); }}>
             <input placeholder="Name" value={forms.event.name} onChange={(e) => setForm('event', 'name', e.target.value)} required />
             <input placeholder="Moroccan city" value={forms.event.location} onChange={(e) => setForm('event', 'location', e.target.value)} required />
@@ -202,9 +238,9 @@ export default function AdminDashboard() {
             <button className="primary-button" type="submit"><Plus size={16} />Add</button>
           </form>
           <DataTable columns={['Event', 'City', 'Date', 'Attendance', 'Status']} rows={events.map((e) => [e.name, e.location, e.event_date, e.attendance_count, e.status])} />
-        </ResourcePanel>
+        </ResourcePanel></section>
 
-        <ResourcePanel title="Bars" icon={<Store size={18} />}>
+        <section id="bars"><ResourcePanel title="Bars" icon={<Store size={18} />}>
           <form className="compact-form" onSubmit={(event) => { event.preventDefault(); submit('bar', '/admin/bars', forms.bar, blankBar); }}>
             <Select value={forms.bar.event_id} onChange={(v) => setForm('bar', 'event_id', v)} options={events} label="Event" />
             <input placeholder="Bar name" value={forms.bar.name} onChange={(e) => setForm('bar', 'name', e.target.value)} required />
@@ -212,7 +248,7 @@ export default function AdminDashboard() {
             <button className="primary-button" type="submit"><Plus size={16} />Add</button>
           </form>
           <DataTable columns={['Bar', 'Event', 'Responsible']} rows={bars.map((b) => [b.name, eventName(events, b.event_id), userName(users, b.responsible_user_id)])} />
-        </ResourcePanel>
+        </ResourcePanel></section>
 
         <ResourcePanel title="Categories" icon={<FolderTree size={18} />}>
           <form className="compact-form" onSubmit={(event) => { event.preventDefault(); submit('category', '/admin/product-categories', forms.category, blankCategory); }}>
@@ -264,7 +300,7 @@ export default function AdminDashboard() {
           <DataTable columns={['Employee', 'Event', 'Bar', 'Salary']} rows={assignments.map((a) => [userName(users, a.user_id), eventName(events, a.event_id), barName(bars, a.bar_id), money(a.salary_amount)])} />
         </ResourcePanel>
 
-        <ResourcePanel title="Bar Stock" icon={<Boxes size={18} />}>
+        <section id="stock"><ResourcePanel title="Bar Stock" icon={<Boxes size={18} />}>
           <form className="compact-form" onSubmit={(event) => { event.preventDefault(); submit('stock', '/admin/stock', forms.stock, blankStock); }}>
             <Select value={forms.stock.bar_id} onChange={(v) => setForm('stock', 'bar_id', v)} options={bars} label="Bar" />
             <Select value={forms.stock.product_id} onChange={(v) => setForm('stock', 'product_id', v)} options={products} label="Product" />
@@ -273,19 +309,27 @@ export default function AdminDashboard() {
             <button className="primary-button" type="submit"><Plus size={16} />Set</button>
           </form>
           <DataTable columns={['Bar', 'Product', 'Allocated', 'Remaining', 'Sold']} rows={stock.map((s) => [barName(bars, s.bar_id), productName(products, s.product_id), s.quantity_allocated, s.quantity_remaining, s.quantity_sold])} />
-        </ResourcePanel>
+        </ResourcePanel></section>
 
-        <ResourcePanel title="Reports" icon={<ReceiptText size={18} />}>
+        <section id="reports"><ResourcePanel title="Reports" icon={<ReceiptText size={18} />}>
           <div className="inline-tools">
             <Select value={forms.reportEventId} onChange={(v) => setForms((c) => ({ ...c, reportEventId: v }))} options={events} label="Event" />
             <button className="secondary-button" onClick={loadSummary} type="button">Summary</button>
           </div>
+          <div className="inline-tools report-actions">
+            <Select value={forms.reportBarId} onChange={(v) => setForms((c) => ({ ...c, reportBarId: v }))} options={eventBars.length ? eventBars : bars} label="Bar" />
+            <button className="secondary-button" disabled={!forms.reportBarId} onClick={() => downloadReport(`/admin/reports/bar/${forms.reportBarId}/pdf`)} type="button"><Download size={16} />Bar PDF</button>
+            <button className="secondary-button" disabled={!forms.reportBarId} onClick={() => downloadReport(`/admin/reports/bar/${forms.reportBarId}/xlsx`)} type="button"><Download size={16} />Bar XLSX</button>
+            <button className="secondary-button" disabled={!forms.reportEventId} onClick={() => downloadReport(`/admin/reports/event/${forms.reportEventId}/bars/pdf`)} type="button"><Download size={16} />All Bars PDF</button>
+            <button className="secondary-button" disabled={!forms.reportEventId} onClick={() => downloadReport(`/admin/reports/event/${forms.reportEventId}/full/xlsx`)} type="button"><Download size={16} />Full XLSX</button>
+            <button className="primary-button" disabled={!forms.reportEventId} onClick={() => downloadReport(`/admin/reports/event/${forms.reportEventId}/bundle`)} type="button"><Download size={16} />Bundle ZIP</button>
+          </div>
           {summary && (
             <div className="summary-grid">
-              <span>Revenue <strong>{money(summary.revenue)}</strong></span>
+              <span className="positive">Revenue <strong>{money(summary.revenue)}</strong></span>
               <span>Cost <strong>{money(summary.cost)}</strong></span>
               <span>Salaries <strong>{money(summary.salaries)}</strong></span>
-              <span>Profit <strong>{money(summary.profit)}</strong></span>
+              <span className={Number(summary.profit) >= 0 ? 'positive' : 'negative'}>Profit <strong>{money(summary.profit)}</strong></span>
             </div>
           )}
           {insights && (
@@ -297,8 +341,37 @@ export default function AdminDashboard() {
               <span>Waste items <strong>{insights.waste.length}</strong></span>
             </div>
           )}
+          <div className="chart-grid">
+            <div className="chart-panel">
+              <h3>Profit trend</h3>
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={profitChart}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#33284d" />
+                  <XAxis dataKey="name" stroke="#b8aee0" />
+                  <YAxis stroke="#b8aee0" />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="profit" fill="#39ffb6" />
+                  <Bar dataKey="revenue" fill="#ff8b2d" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="chart-panel">
+              <h3>Product sales mix</h3>
+              <ResponsiveContainer width="100%" height={240}>
+                <PieChart>
+                  <Pie data={chartBars} dataKey="sold" nameKey="name" innerRadius={44} outerRadius={86}>
+                    {chartBars.map((entry, index) => <Cell key={entry.name} fill={['#39d9ff', '#ff4fd8', '#ff8b2d', '#39ffb6', '#ffd166'][index % 5]} />)}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          {lowStock.length > 0 && <DataTable columns={['Low stock bar', 'Product', 'Remaining %']} rows={lowStock.slice(0, 8).map((item) => [item.bar_name, item.product_name, Number(item.remaining_pct).toFixed(1)])} />}
           <DataTable columns={['Event', 'Revenue', 'Profit', 'Attendance']} rows={comparison.map((e) => [e.event_name, money(e.revenue), money(e.profit), e.attendance_count])} />
-        </ResourcePanel>
+        </ResourcePanel></section>
 
         <ResourcePanel title="End-of-Night Sales" icon={<ReceiptText size={18} />}>
           <form className="compact-form" onSubmit={recordNight}>
@@ -318,6 +391,10 @@ export default function AdminDashboard() {
         <ResourcePanel title="Price History" icon={<BadgeDollarSign size={18} />}>
           <DataTable columns={['Event', 'Product', 'Old', 'New']} rows={priceHistory.slice(0, 12).map((p) => [eventName(events, p.event_id), productName(products, p.product_id), p.old_selling_price ? money(p.old_selling_price) : '-', money(p.new_selling_price)])} />
         </ResourcePanel>
+
+        <section id="settings"><ResourcePanel title="Audit Log" icon={<ReceiptText size={18} />}>
+          <DataTable columns={['When', 'Action', 'Entity', 'User']} rows={auditLogs.slice(0, 20).map((log) => [new Date(log.created_at).toLocaleString(), log.action, `${log.entity_type} #${log.entity_id || '-'}`, userName(users, log.user_id)])} />
+        </ResourcePanel></section>
       </div>
     </main>
   );

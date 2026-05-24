@@ -29,6 +29,7 @@ CREATE TABLE events (
   start_time TIME NOT NULL,
   end_time TIME NOT NULL,
   status VARCHAR(20) NOT NULL,
+  attendance_count INT NOT NULL DEFAULT 0,
   created_by INT NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CHECK (status IN ('upcoming', 'active', 'closed')),
@@ -75,6 +76,20 @@ CREATE TABLE bar_assignments (
   CONSTRAINT fk_bar_assignments_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE event_salaries (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  event_id INT NOT NULL,
+  user_id INT NOT NULL,
+  bar_id INT NOT NULL,
+  salary_amount DECIMAL(10,2) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX ix_event_salaries_event_user_created (event_id, user_id, created_at),
+  INDEX ix_event_salaries_event_bar (event_id, bar_id),
+  CONSTRAINT fk_event_salaries_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_salaries_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_salaries_bar FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE event_stock (
   id INT AUTO_INCREMENT PRIMARY KEY,
   event_id INT NOT NULL,
@@ -99,6 +114,50 @@ CREATE TABLE bar_stock (
   UNIQUE KEY uq_bar_stock_product (bar_id, product_id),
   CONSTRAINT fk_bar_stock_bar FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE,
   CONSTRAINT fk_bar_stock_product FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE bartender_sales (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  event_id INT NOT NULL,
+  bar_id INT NOT NULL,
+  user_id INT NOT NULL,
+  units_sold DECIMAL(10,2) NOT NULL DEFAULT 0,
+  sales_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  contribution_pct DECIMAL(5,2) NOT NULL DEFAULT 0,
+  recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_bartender_sales_event_bar_user (event_id, bar_id, user_id),
+  INDEX ix_bartender_sales_event_user (event_id, user_id),
+  CONSTRAINT fk_bartender_sales_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_bartender_sales_bar FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE,
+  CONSTRAINT fk_bartender_sales_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE price_history (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  event_stock_id INT NOT NULL,
+  event_id INT NOT NULL,
+  product_id INT NOT NULL,
+  old_selling_price DECIMAL(10,2) NULL,
+  new_selling_price DECIMAL(10,2) NOT NULL,
+  changed_by_id INT NULL,
+  changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_price_history_event_stock FOREIGN KEY (event_stock_id) REFERENCES event_stock(id) ON DELETE CASCADE,
+  CONSTRAINT fk_price_history_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_price_history_product FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_price_history_user FOREIGN KEY (changed_by_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE audit_logs (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NULL,
+  action VARCHAR(80) NOT NULL,
+  entity_type VARCHAR(80) NOT NULL,
+  entity_id INT NULL,
+  details TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX ix_audit_logs_user_id (user_id),
+  INDEX ix_audit_logs_entity_id (entity_id),
+  CONSTRAINT fk_audit_logs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE VIEW bar_stock_financials AS
@@ -132,12 +191,12 @@ INSERT INTO users (id, full_name, email, phone_number, role, hashed_password, is
 (10, 'Rachid Mansouri', 'employee9@festivapro.local', '+212600000018', 'employee', '$2b$12$C6UzMDM.H6dfI/f/IKcEeO6c7jo1dfmjdgKiSmTsgZ7CeJc3prN9a', TRUE),
 (11, 'Lina Sabri', 'employee10@festivapro.local', '+212600000019', 'employee', '$2b$12$C6UzMDM.H6dfI/f/IKcEeO6c7jo1dfmjdgKiSmTsgZ7CeJc3prN9a', TRUE);
 
-INSERT INTO events (id, name, location, event_date, start_time, end_time, status, created_by) VALUES
-(1, 'Casa Nights Festival', 'Casablanca', '2026-06-05', '18:00:00', '02:00:00', 'upcoming', 1),
-(2, 'Marrakech Desert Beats', 'Marrakech', '2026-06-12', '19:00:00', '03:00:00', 'upcoming', 1),
-(3, 'Agadir Beach Sessions', 'Agadir', '2026-06-19', '17:30:00', '01:30:00', 'upcoming', 1),
-(4, 'Rabat Stage Live', 'Rabat', '2026-06-26', '18:30:00', '02:30:00', 'upcoming', 1),
-(5, 'Tanger Harbor Sound', 'Tanger', '2026-07-03', '19:30:00', '03:30:00', 'upcoming', 1);
+INSERT INTO events (id, name, location, event_date, start_time, end_time, status, attendance_count, created_by) VALUES
+(1, 'Casa Nights Festival', 'Casablanca', '2026-06-05', '18:00:00', '02:00:00', 'upcoming', 1800, 1),
+(2, 'Marrakech Desert Beats', 'Marrakech', '2026-06-12', '19:00:00', '03:00:00', 'upcoming', 2300, 1),
+(3, 'Agadir Beach Sessions', 'Agadir', '2026-06-19', '17:30:00', '01:30:00', 'upcoming', 1500, 1),
+(4, 'Rabat Stage Live', 'Rabat', '2026-06-26', '18:30:00', '02:30:00', 'upcoming', 1650, 1),
+(5, 'Tanger Harbor Sound', 'Tanger', '2026-07-03', '19:30:00', '03:30:00', 'upcoming', 2100, 1);
 
 INSERT INTO product_categories (id, name) VALUES (1, 'Beer'), (2, 'Hard Alcohol'), (3, 'Soda'), (4, 'Consumables');
 
@@ -160,6 +219,11 @@ SELECT b.id, u.id
 FROM bars b
 JOIN users u ON u.role = 'employee'
 WHERE u.id IN (b.responsible_user_id, 2 + MOD(b.id, 10), 2 + MOD(b.id + 3, 10));
+
+INSERT INTO event_salaries (event_id, bar_id, user_id, salary_amount)
+SELECT b.event_id, ba.bar_id, ba.user_id, 350.00
+FROM bar_assignments ba
+JOIN bars b ON b.id = ba.bar_id;
 
 DELIMITER //
 CREATE PROCEDURE seed_stock()

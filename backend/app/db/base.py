@@ -1,5 +1,6 @@
 from app.db.session import Base
 from app.models.entities import (
+    AuditLog,
     Bar,
     BarAssignment,
     BarStock,
@@ -16,6 +17,7 @@ from app.models.entities import (
 
 __all__ = [
     "Base",
+    "AuditLog",
     "Bar",
     "BarAssignment",
     "BarStock",
