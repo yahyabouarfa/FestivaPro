@@ -16,3 +16,9 @@ class MoneySummary(BaseModel):
     cost: Decimal
     salaries: Decimal
     profit: Decimal
+
+
+class NamedMetric(BaseModel):
+    id: int | None
+    name: str | None
+    value: Decimal

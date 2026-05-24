@@ -8,27 +8,49 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbSession, require_admin
 from app.core.security import hash_password
-from app.models import Bar, BarAssignment, BarStock, Event, EventStock, Product, ProductCategory, User
+from app.models import (
+    Bar,
+    BarStock,
+    BartenderSale,
+    Event,
+    EventSalary,
+    EventStock,
+    PriceHistory,
+    Product,
+    ProductCategory,
+    User,
+)
 from app.schemas.common import ApiMessage, MoneySummary
 from app.schemas.operations import (
     AssignmentCreate,
     AssignmentRead,
     BarCreate,
+    BarFinancialSummary,
     BarRead,
     BarUpdate,
+    BartenderLeaderboardItem,
+    BartenderSaleRead,
+    EndOfNightInput,
+    EndOfNightResult,
+    EventComparisonItem,
     EventCreate,
+    EventInsight,
     EventRead,
     EventStockRead,
     EventStockUpsert,
     EventUpdate,
+    LowStockAlert,
+    PriceHistoryRead,
     ProductCategoryCreate,
     ProductCategoryRead,
     ProductCreate,
+    ProductRankingItem,
     ProductRead,
     ProductUpdate,
     RandomAssignmentRequest,
     StockRead,
     StockUpsert,
+    WasteItem,
 )
 from app.schemas.users import UserCreate, UserRead, UserUpdate
 
@@ -64,6 +86,89 @@ def require_employee(db: DbSession, user_id: int) -> User:
     if user.role != "employee":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only employees can be assigned to bars.")
     return user
+
+
+def latest_assignment_ids(db: DbSession, event_id: int | None = None):
+    query = db.query(func.max(EventSalary.id).label("id"))
+    if event_id:
+        query = query.filter(EventSalary.event_id == event_id)
+    return query.group_by(EventSalary.event_id, EventSalary.user_id).subquery()
+
+
+def current_assignment_query(db: DbSession, event_id: int | None = None, user_id: int | None = None):
+    latest = latest_assignment_ids(db, event_id)
+    query = db.query(EventSalary).join(latest, EventSalary.id == latest.c.id)
+    if event_id:
+        query = query.filter(EventSalary.event_id == event_id)
+    if user_id:
+        query = query.filter(EventSalary.user_id == user_id)
+    return query
+
+
+def validate_assignment(db: DbSession, event_id: int, bar_id: int, user_id: int) -> Bar:
+    event = get_or_404(db, Event, event_id)
+    if event.status == "closed":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Closed events cannot be reassigned.")
+    bar = get_or_404(db, Bar, bar_id)
+    if bar.event_id != event_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Bar does not belong to the selected event.")
+    require_employee(db, user_id)
+    return bar
+
+
+def money(value) -> Decimal:
+    return Decimal(value or 0)
+
+
+def bar_financial_rows(db: DbSession, event_id: int) -> list[dict]:
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              b.id AS bar_id,
+              b.name AS bar_name,
+              COALESCE(stock.gross_revenue, 0) AS gross_revenue,
+              COALESCE(stock.total_cost, 0) AS total_cost,
+              COALESCE(salary.staff_cost, 0) AS staff_cost,
+              COALESCE(stock.gross_revenue, 0) - COALESCE(stock.total_cost, 0) - COALESCE(salary.staff_cost, 0) AS profit
+            FROM bars b
+            LEFT JOIN (
+              SELECT
+                bs.bar_id,
+                SUM(bs.quantity_sold * es.selling_price_per_unit) AS gross_revenue,
+                SUM(bs.quantity_sold * es.bought_price_per_unit) AS total_cost
+              FROM bar_stock bs
+              JOIN bars sb ON sb.id = bs.bar_id
+              JOIN event_stock es ON es.event_id = sb.event_id AND es.product_id = bs.product_id
+              WHERE sb.event_id = :event_id
+              GROUP BY bs.bar_id
+            ) stock ON stock.bar_id = b.id
+            LEFT JOIN (
+              SELECT cur.bar_id, SUM(cur.salary_amount) AS staff_cost
+              FROM event_salaries cur
+              JOIN (
+                SELECT event_id, user_id, MAX(id) AS id
+                FROM event_salaries
+                WHERE event_id = :event_id
+                GROUP BY event_id, user_id
+              ) latest ON latest.id = cur.id
+              GROUP BY cur.bar_id
+            ) salary ON salary.bar_id = b.id
+            WHERE b.event_id = :event_id
+            ORDER BY profit DESC, gross_revenue DESC
+            """
+        ),
+        {"event_id": event_id},
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def event_money_summary(db: DbSession, event_id: int) -> MoneySummary:
+    rows = bar_financial_rows(db, event_id)
+    revenue = sum(money(row["gross_revenue"]) for row in rows)
+    cost = sum(money(row["total_cost"]) for row in rows)
+    salaries = sum(money(row["staff_cost"]) for row in rows)
+    return MoneySummary(revenue=revenue, cost=cost, salaries=salaries, profit=revenue - cost - salaries)
 
 
 @router.get("/users", response_model=list[UserRead])
@@ -237,38 +342,66 @@ def list_event_stock(db: DbSession, _: AdminUser, event_id: int | None = None):
 
 
 @router.post("/event-stock", response_model=EventStockRead)
-def upsert_event_stock(payload: EventStockUpsert, db: DbSession, _: AdminUser):
+def upsert_event_stock(payload: EventStockUpsert, db: DbSession, current_user: AdminUser):
     get_or_404(db, Event, payload.event_id)
     get_or_404(db, Product, payload.product_id)
     stock = db.query(EventStock).filter(EventStock.event_id == payload.event_id, EventStock.product_id == payload.product_id).first()
     if not stock:
         stock = EventStock(**payload.model_dump())
         db.add(stock)
+        db.flush()
+        db.add(
+            PriceHistory(
+                event_stock_id=stock.id,
+                event_id=stock.event_id,
+                product_id=stock.product_id,
+                old_selling_price=None,
+                new_selling_price=stock.selling_price_per_unit,
+                changed_by_id=current_user.id,
+            )
+        )
     else:
+        old_price = stock.selling_price_per_unit
         apply_updates(stock, payload)
+        if old_price != payload.selling_price_per_unit:
+            db.add(
+                PriceHistory(
+                    event_stock_id=stock.id,
+                    event_id=stock.event_id,
+                    product_id=stock.product_id,
+                    old_selling_price=old_price,
+                    new_selling_price=payload.selling_price_per_unit,
+                    changed_by_id=current_user.id,
+                )
+            )
     commit_or_409(db)
     db.refresh(stock)
     return stock
 
 
+@router.get("/price-history", response_model=list[PriceHistoryRead])
+def list_price_history(db: DbSession, _: AdminUser, event_id: int | None = None, product_id: int | None = None):
+    query = db.query(PriceHistory).order_by(PriceHistory.changed_at.desc())
+    if event_id:
+        query = query.filter(PriceHistory.event_id == event_id)
+    if product_id:
+        query = query.filter(PriceHistory.product_id == product_id)
+    return query.all()
+
+
 @router.get("/assignments", response_model=list[AssignmentRead])
 def list_assignments(db: DbSession, _: AdminUser, event_id: int | None = None, user_id: int | None = None):
-    query = db.query(BarAssignment).join(Bar, Bar.id == BarAssignment.bar_id).order_by(BarAssignment.assigned_at.desc())
-    if event_id:
-        query = query.filter(Bar.event_id == event_id)
-    if user_id:
-        query = query.filter(BarAssignment.user_id == user_id)
-    return query.all()
+    return current_assignment_query(db, event_id=event_id, user_id=user_id).order_by(EventSalary.created_at.desc()).all()
 
 
 @router.post("/assignments", response_model=AssignmentRead, status_code=status.HTTP_201_CREATED)
 def create_assignment(payload: AssignmentCreate, db: DbSession, _: AdminUser):
-    get_or_404(db, Bar, payload.bar_id)
-    require_employee(db, payload.user_id)
-    assignment = db.query(BarAssignment).filter(BarAssignment.bar_id == payload.bar_id, BarAssignment.user_id == payload.user_id).first()
-    if not assignment:
-        assignment = BarAssignment(**payload.model_dump())
-        db.add(assignment)
+    validate_assignment(db, payload.event_id, payload.bar_id, payload.user_id)
+    current = current_assignment_query(db, event_id=payload.event_id, user_id=payload.user_id).first()
+    if current and current.bar_id == payload.bar_id and current.salary_amount == payload.salary_amount:
+        return current
+    assignment = EventSalary(**payload.model_dump())
+    db.add(assignment)
     commit_or_409(db)
     db.refresh(assignment)
     return assignment
@@ -276,7 +409,9 @@ def create_assignment(payload: AssignmentCreate, db: DbSession, _: AdminUser):
 
 @router.post("/assignments/random", response_model=list[AssignmentRead])
 def random_assignments(payload: RandomAssignmentRequest, db: DbSession, _: AdminUser):
-    get_or_404(db, Event, payload.event_id)
+    event = get_or_404(db, Event, payload.event_id)
+    if event.status == "closed":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Closed events cannot be reassigned.")
     bars = db.query(Bar).filter(Bar.event_id == payload.event_id).order_by(Bar.name).all()
     employees = db.query(User).filter(User.role == "employee", User.is_active.is_(True)).order_by(User.full_name).all()
     if not bars:
@@ -284,15 +419,16 @@ def random_assignments(payload: RandomAssignmentRequest, db: DbSession, _: Admin
     if not employees:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Create at least one active employee before random assignment.")
     shuffle(employees)
-    saved: list[BarAssignment] = []
-    for bar_index, bar in enumerate(bars):
-        for offset in range(3):
-            employee = employees[(bar_index * 3 + offset) % len(employees)]
-            assignment = db.query(BarAssignment).filter(BarAssignment.bar_id == bar.id, BarAssignment.user_id == employee.id).first()
-            if not assignment:
-                assignment = BarAssignment(bar_id=bar.id, user_id=employee.id)
-                db.add(assignment)
-            saved.append(assignment)
+    saved: list[EventSalary] = []
+    for index, employee in enumerate(employees):
+        bar = bars[index % len(bars)]
+        current = current_assignment_query(db, event_id=payload.event_id, user_id=employee.id).first()
+        if current and current.bar_id == bar.id and current.salary_amount == payload.salary_amount:
+            saved.append(current)
+            continue
+        assignment = EventSalary(event_id=payload.event_id, user_id=employee.id, bar_id=bar.id, salary_amount=payload.salary_amount)
+        db.add(assignment)
+        saved.append(assignment)
     commit_or_409(db)
     return saved
 
@@ -326,23 +462,228 @@ def upsert_stock(payload: StockUpsert, db: DbSession, _: AdminUser):
     return stock
 
 
+@router.get("/bartender-sales", response_model=list[BartenderSaleRead])
+def list_bartender_sales(db: DbSession, _: AdminUser, event_id: int | None = None, bar_id: int | None = None):
+    query = db.query(BartenderSale).order_by(BartenderSale.recorded_at.desc())
+    if event_id:
+        query = query.filter(BartenderSale.event_id == event_id)
+    if bar_id:
+        query = query.filter(BartenderSale.bar_id == bar_id)
+    return query.all()
+
+
+@router.post("/end-of-night", response_model=EndOfNightResult)
+def record_end_of_night(payload: EndOfNightInput, db: DbSession, _: AdminUser):
+    bar = get_or_404(db, Bar, payload.bar_id)
+    if bar.event_id != payload.event_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Bar does not belong to the selected event.")
+
+    updated_stock: list[BarStock] = []
+    for item in payload.stock_items:
+        stock = db.query(BarStock).filter(BarStock.bar_id == payload.bar_id, BarStock.product_id == item.product_id).first()
+        if not stock:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stock not found for product {item.product_id}.")
+        if item.quantity_remaining > stock.quantity_allocated:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Remaining quantity cannot exceed allocated quantity.")
+        stock.quantity_remaining = item.quantity_remaining
+        updated_stock.append(stock)
+
+    db.flush()
+    bar_revenue = next((money(row["gross_revenue"]) for row in bar_financial_rows(db, payload.event_id) if row["bar_id"] == payload.bar_id), Decimal(0))
+    total_units = sum(money(stock.quantity_sold) for stock in db.query(BarStock).filter(BarStock.bar_id == payload.bar_id).all())
+    average_unit_revenue = (bar_revenue / total_units) if total_units else Decimal(0)
+
+    saved_sales: list[BartenderSale] = []
+    for item in payload.bartender_sales:
+        current = current_assignment_query(db, event_id=payload.event_id, user_id=item.user_id).first()
+        if not current or current.bar_id != payload.bar_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Bartender is not assigned to this bar for this event.")
+        sales_amount = item.sales_amount
+        if sales_amount is None and item.contribution_pct is not None:
+            sales_amount = (bar_revenue * item.contribution_pct / Decimal(100)).quantize(Decimal("0.01"))
+        if sales_amount is None:
+            sales_amount = (item.units_sold * average_unit_revenue).quantize(Decimal("0.01"))
+        contribution_pct = item.contribution_pct
+        if contribution_pct is None:
+            contribution_pct = ((sales_amount / bar_revenue) * Decimal(100)).quantize(Decimal("0.01")) if bar_revenue else Decimal(0)
+        sale = (
+            db.query(BartenderSale)
+            .filter(BartenderSale.event_id == payload.event_id, BartenderSale.bar_id == payload.bar_id, BartenderSale.user_id == item.user_id)
+            .first()
+        )
+        if not sale:
+            sale = BartenderSale(event_id=payload.event_id, bar_id=payload.bar_id, user_id=item.user_id)
+            db.add(sale)
+        sale.units_sold = item.units_sold
+        sale.sales_amount = sales_amount
+        sale.contribution_pct = contribution_pct
+        saved_sales.append(sale)
+
+    commit_or_409(db)
+    for stock in updated_stock:
+        db.refresh(stock)
+    for sale in saved_sales:
+        db.refresh(sale)
+    return EndOfNightResult(stock=updated_stock, bartender_sales=saved_sales)
+
+
 @router.get("/reports/summary", response_model=MoneySummary)
 def financial_summary(db: DbSession, _: AdminUser, event_id: int):
-    row = db.execute(
+    return event_money_summary(db, event_id)
+
+
+@router.get("/reports/bar-financials", response_model=list[BarFinancialSummary])
+def bar_financials(db: DbSession, _: AdminUser, event_id: int):
+    return [BarFinancialSummary(**row) for row in bar_financial_rows(db, event_id)]
+
+
+@router.get("/reports/best-sellers", response_model=list[ProductRankingItem])
+def best_sellers(db: DbSession, _: AdminUser, event_id: int, bar_id: int | None = None):
+    where_bar = "AND b.id = :bar_id" if bar_id else ""
+    group_bar = "b.id, b.name," if bar_id else ""
+    select_bar = "b.id AS bar_id, b.name AS bar_name," if bar_id else "NULL AS bar_id, NULL AS bar_name,"
+    params = {"event_id": event_id}
+    if bar_id:
+        params["bar_id"] = bar_id
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+              p.id AS product_id,
+              p.name AS product_name,
+              {select_bar}
+              SUM(bs.quantity_sold) AS quantity_sold,
+              SUM(bs.quantity_sold * es.selling_price_per_unit) AS revenue
+            FROM bar_stock bs
+            JOIN bars b ON b.id = bs.bar_id
+            JOIN products p ON p.id = bs.product_id
+            JOIN event_stock es ON es.event_id = b.event_id AND es.product_id = bs.product_id
+            WHERE b.event_id = :event_id {where_bar}
+            GROUP BY {group_bar} p.id, p.name
+            ORDER BY quantity_sold DESC, revenue DESC
+            """
+        ),
+        params,
+    ).mappings().all()
+    return [ProductRankingItem(**dict(row)) for row in rows]
+
+
+@router.get("/reports/low-stock", response_model=list[LowStockAlert])
+def low_stock_alerts(db: DbSession, _: AdminUser, event_id: int):
+    rows = db.execute(
         text(
             """
             SELECT
-              COALESCE(SUM(revenue), 0) AS revenue,
-              COALESCE(SUM(cost), 0) AS cost,
-              COALESCE(SUM(profit), 0) AS stock_profit
-            FROM bar_stock_financials
-            WHERE event_id = :event_id
+              b.id AS bar_id,
+              b.name AS bar_name,
+              p.id AS product_id,
+              p.name AS product_name,
+              bs.quantity_allocated,
+              bs.quantity_remaining,
+              CASE WHEN bs.quantity_allocated = 0 THEN 0 ELSE (bs.quantity_remaining / bs.quantity_allocated) * 100 END AS remaining_pct
+            FROM bar_stock bs
+            JOIN bars b ON b.id = bs.bar_id
+            JOIN products p ON p.id = bs.product_id
+            WHERE b.event_id = :event_id
+              AND bs.quantity_allocated > 0
+              AND bs.quantity_remaining < (bs.quantity_allocated * 0.10)
+            ORDER BY remaining_pct ASC, b.name, p.name
             """
         ),
         {"event_id": event_id},
-    ).mappings().one()
-    salaries = db.query(func.coalesce(func.count(BarAssignment.id) * 300, 0)).join(Bar, Bar.id == BarAssignment.bar_id).filter(Bar.event_id == event_id).scalar()
-    revenue = Decimal(row["revenue"] or 0)
-    cost = Decimal(row["cost"] or 0)
-    salary_total = Decimal(salaries or 0)
-    return MoneySummary(revenue=revenue, cost=cost, salaries=salary_total, profit=Decimal(row["stock_profit"] or 0) - salary_total)
+    ).mappings().all()
+    return [LowStockAlert(**dict(row)) for row in rows]
+
+
+@router.get("/reports/waste", response_model=list[WasteItem])
+def waste_tracker(db: DbSession, _: AdminUser, event_id: int):
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              b.id AS bar_id,
+              b.name AS bar_name,
+              p.id AS product_id,
+              p.name AS product_name,
+              bs.quantity_remaining,
+              bs.quantity_remaining * es.bought_price_per_unit AS estimated_cost
+            FROM bar_stock bs
+            JOIN bars b ON b.id = bs.bar_id
+            JOIN products p ON p.id = bs.product_id
+            JOIN event_stock es ON es.event_id = b.event_id AND es.product_id = bs.product_id
+            WHERE b.event_id = :event_id AND bs.quantity_remaining > 0
+            ORDER BY estimated_cost DESC
+            """
+        ),
+        {"event_id": event_id},
+    ).mappings().all()
+    return [WasteItem(**dict(row)) for row in rows]
+
+
+@router.get("/reports/bartender-leaderboard", response_model=list[BartenderLeaderboardItem])
+def bartender_leaderboard(db: DbSession, _: AdminUser, event_id: int | None = None):
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              u.id AS user_id,
+              u.full_name,
+              COUNT(DISTINCT bs.event_id) AS events_worked,
+              COALESCE(SUM(bs.units_sold), 0) AS total_units,
+              COALESCE(SUM(bs.sales_amount), 0) AS total_sales
+            FROM users u
+            JOIN bartender_sales bs ON bs.user_id = u.id
+            WHERE (:event_id IS NULL OR bs.event_id = :event_id)
+            GROUP BY u.id, u.full_name
+            ORDER BY total_sales DESC, total_units DESC
+            """
+        ),
+        {"event_id": event_id},
+    ).mappings().all()
+    return [BartenderLeaderboardItem(**dict(row)) for row in rows]
+
+
+@router.get("/reports/event-insights", response_model=EventInsight)
+def event_insights(db: DbSession, _: AdminUser, event_id: int):
+    summary = event_money_summary(db, event_id)
+    bar_rows = [BarFinancialSummary(**row) for row in bar_financial_rows(db, event_id)]
+    best = best_sellers(db, _, event_id)
+    leaderboard = bartender_leaderboard(db, _, event_id)
+    return EventInsight(
+        event_id=event_id,
+        revenue=summary.revenue,
+        cost=summary.cost,
+        salaries=summary.salaries,
+        profit=summary.profit,
+        top_performing_bar=bar_rows[0] if bar_rows else None,
+        top_selling_product=best[0] if best else None,
+        highest_earning_bartender=leaderboard[0] if leaderboard else None,
+        low_stock_alerts=low_stock_alerts(db, _, event_id),
+        best_sellers=best,
+        waste=waste_tracker(db, _, event_id),
+    )
+
+
+@router.get("/reports/event-comparison", response_model=list[EventComparisonItem])
+def event_comparison(db: DbSession, _: AdminUser, event_ids: list[int] | None = Query(default=None)):
+    query = db.query(Event).order_by(Event.event_date.desc())
+    if event_ids:
+        query = query.filter(Event.id.in_(event_ids))
+    results: list[EventComparisonItem] = []
+    for event in query.all():
+        summary = event_money_summary(db, event.id)
+        revenue_per_attendee = (summary.revenue / Decimal(event.attendance_count)).quantize(Decimal("0.01")) if event.attendance_count else Decimal(0)
+        results.append(
+            EventComparisonItem(
+                event_id=event.id,
+                event_name=event.name,
+                event_date=event.event_date,
+                attendance_count=event.attendance_count,
+                revenue=summary.revenue,
+                cost=summary.cost,
+                salaries=summary.salaries,
+                profit=summary.profit,
+                revenue_per_attendee=revenue_per_attendee,
+            )
+        )
+    return results

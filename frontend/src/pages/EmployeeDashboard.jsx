@@ -3,7 +3,7 @@ import { BadgeDollarSign, ClipboardList, Store, WalletCards } from 'lucide-react
 import { api } from '../api/client.js';
 
 function money(value) {
-  return Number(value || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+  return Number(value || 0).toLocaleString(undefined, { style: 'currency', currency: 'MAD' });
 }
 
 export default function EmployeeDashboard() {
@@ -37,21 +37,24 @@ export default function EmployeeDashboard() {
         </section>
       ) : (
         <>
+          {dashboard.reassignment_notice && <div className="status-pill">{dashboard.reassignment_notice}</div>}
           <section className="employee-summary">
             <div>
               <Store size={22} />
               <span>Assigned bar</span>
               <strong>{dashboard.bar?.name}</strong>
+              <small>{dashboard.responsible_person}</small>
             </div>
             <div>
               <WalletCards size={22} />
               <span>Shift salary</span>
-              <strong>{money(dashboard.assignment.shift_salary)}</strong>
+              <strong>{money(dashboard.assignment.salary_amount)}</strong>
             </div>
             <div>
               <BadgeDollarSign size={22} />
               <span>Your contribution</span>
               <strong>{money(dashboard.contribution)}</strong>
+              <small>{dashboard.units_sold} units / {dashboard.contribution_pct}%</small>
             </div>
           </section>
 

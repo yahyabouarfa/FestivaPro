@@ -32,7 +32,7 @@ Email: admin@festivapro.local
 Password: password
 ```
 
-The versioned schema lives in `backend/alembic/versions/202605240001_initial_schema.py`. A phpMyAdmin-friendly SQL copy is in `migrations/001_initial_schema.sql`.
+The versioned schema lives in `backend/alembic/versions/`. phpMyAdmin-friendly SQL copies are in `migrations/` and should be applied in numeric order.
 
 ## Frontend
 

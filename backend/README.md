@@ -24,6 +24,8 @@ Run migrations. The initial migration creates the full event/bar/product/stock s
 alembic upgrade head
 ```
 
+For phpMyAdmin-only setup, apply the SQL files in `../migrations/` in numeric order.
+
 Seeded admin login:
 
 ```text

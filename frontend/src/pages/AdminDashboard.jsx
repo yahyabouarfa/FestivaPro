@@ -16,13 +16,14 @@ import { api } from '../api/client.js';
 import ResourcePanel from '../components/ResourcePanel.jsx';
 
 const blankUser = { full_name: '', email: '', phone_number: '', role: 'employee', password: '', is_active: true };
-const blankEvent = { name: '', location: '', event_date: '', start_time: '', end_time: '', status: 'upcoming' };
+const blankEvent = { name: '', location: '', event_date: '', start_time: '', end_time: '', status: 'upcoming', attendance_count: '0' };
 const blankBar = { event_id: '', name: '', responsible_user_id: '' };
 const blankCategory = { name: '' };
 const blankProduct = { name: '', category_id: '', unit: 'unit' };
 const blankEventStock = { event_id: '', product_id: '', quantity_total: '0', bought_price_per_unit: '0', selling_price_per_unit: '0' };
-const blankAssignment = { bar_id: '', user_id: '' };
+const blankAssignment = { event_id: '', bar_id: '', user_id: '', salary_amount: '0' };
 const blankStock = { bar_id: '', product_id: '', quantity_allocated: '0', quantity_remaining: '0' };
+const blankNight = { event_id: '', bar_id: '', product_id: '', quantity_remaining: '0', user_id: '', units_sold: '0', sales_amount: '', contribution_pct: '' };
 
 function money(value) {
   return Number(value || 0).toLocaleString(undefined, { style: 'currency', currency: 'MAD' });
@@ -37,7 +38,11 @@ export default function AdminDashboard() {
   const [eventStock, setEventStock] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [stock, setStock] = useState([]);
+  const [bartenderSales, setBartenderSales] = useState([]);
+  const [priceHistory, setPriceHistory] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [insights, setInsights] = useState(null);
+  const [comparison, setComparison] = useState([]);
   const [message, setMessage] = useState('');
   const [forms, setForms] = useState({
     user: blankUser,
@@ -48,14 +53,16 @@ export default function AdminDashboard() {
     eventStock: blankEventStock,
     assignment: blankAssignment,
     stock: blankStock,
+    night: blankNight,
     reportEventId: '',
     randomEventId: '',
+    randomSalary: '0',
   });
 
   const employees = useMemo(() => users.filter((user) => user.role === 'employee' && user.is_active), [users]);
 
   async function loadAll() {
-    const [userRes, eventRes, barRes, categoryRes, productRes, eventStockRes, assignmentRes, stockRes] = await Promise.all([
+    const [userRes, eventRes, barRes, categoryRes, productRes, eventStockRes, assignmentRes, stockRes, bartenderSaleRes, priceHistoryRes] = await Promise.all([
       api.get('/admin/users'),
       api.get('/admin/events'),
       api.get('/admin/bars'),
@@ -64,6 +71,8 @@ export default function AdminDashboard() {
       api.get('/admin/event-stock'),
       api.get('/admin/assignments'),
       api.get('/admin/stock'),
+      api.get('/admin/bartender-sales'),
+      api.get('/admin/price-history'),
     ]);
     setUsers(userRes.data);
     setEvents(eventRes.data);
@@ -73,6 +82,8 @@ export default function AdminDashboard() {
     setEventStock(eventStockRes.data);
     setAssignments(assignmentRes.data);
     setStock(stockRes.data);
+    setBartenderSales(bartenderSaleRes.data);
+    setPriceHistory(priceHistoryRes.data);
   }
 
   useEffect(() => {
@@ -99,7 +110,7 @@ export default function AdminDashboard() {
     if (!forms.randomEventId) return;
     setMessage('');
     try {
-      await api.post('/admin/assignments/random', { event_id: forms.randomEventId });
+      await api.post('/admin/assignments/random', { event_id: forms.randomEventId, salary_amount: forms.randomSalary });
       await loadAll();
       setMessage('Random assignment completed.');
     } catch (err) {
@@ -109,8 +120,37 @@ export default function AdminDashboard() {
 
   async function loadSummary() {
     if (!forms.reportEventId) return;
-    const { data } = await api.get('/admin/reports/summary', { params: { event_id: forms.reportEventId } });
-    setSummary(data);
+    const [summaryRes, insightsRes, comparisonRes] = await Promise.all([
+      api.get('/admin/reports/summary', { params: { event_id: forms.reportEventId } }),
+      api.get('/admin/reports/event-insights', { params: { event_id: forms.reportEventId } }),
+      api.get('/admin/reports/event-comparison'),
+    ]);
+    setSummary(summaryRes.data);
+    setInsights(insightsRes.data);
+    setComparison(comparisonRes.data);
+  }
+
+  async function recordNight(event) {
+    event.preventDefault();
+    const bartender_sales = forms.night.user_id
+      ? [{
+          user_id: forms.night.user_id,
+          units_sold: forms.night.units_sold || '0',
+          sales_amount: forms.night.sales_amount || null,
+          contribution_pct: forms.night.contribution_pct || null,
+        }]
+      : [];
+    await submit(
+      'night',
+      '/admin/end-of-night',
+      {
+        event_id: forms.night.event_id,
+        bar_id: forms.night.bar_id,
+        stock_items: [{ product_id: forms.night.product_id, quantity_remaining: forms.night.quantity_remaining }],
+        bartender_sales,
+      },
+      blankNight,
+    );
   }
 
   return (
@@ -153,6 +193,7 @@ export default function AdminDashboard() {
             <input value={forms.event.event_date} onChange={(e) => setForm('event', 'event_date', e.target.value)} required type="date" />
             <input value={forms.event.start_time} onChange={(e) => setForm('event', 'start_time', e.target.value)} required type="time" />
             <input value={forms.event.end_time} onChange={(e) => setForm('event', 'end_time', e.target.value)} required type="time" />
+            <input placeholder="Attendance" value={forms.event.attendance_count} onChange={(e) => setForm('event', 'attendance_count', e.target.value)} type="number" />
             <select value={forms.event.status} onChange={(e) => setForm('event', 'status', e.target.value)}>
               <option value="upcoming">Upcoming</option>
               <option value="active">Active</option>
@@ -160,7 +201,7 @@ export default function AdminDashboard() {
             </select>
             <button className="primary-button" type="submit"><Plus size={16} />Add</button>
           </form>
-          <DataTable columns={['Event', 'City', 'Date', 'Status']} rows={events.map((e) => [e.name, e.location, e.event_date, e.status])} />
+          <DataTable columns={['Event', 'City', 'Date', 'Attendance', 'Status']} rows={events.map((e) => [e.name, e.location, e.event_date, e.attendance_count, e.status])} />
         </ResourcePanel>
 
         <ResourcePanel title="Bars" icon={<Store size={18} />}>
@@ -209,15 +250,18 @@ export default function AdminDashboard() {
 
         <ResourcePanel title="Assignments" icon={<ClipboardList size={18} />}>
           <form className="compact-form" onSubmit={(event) => { event.preventDefault(); submit('assignment', '/admin/assignments', forms.assignment, blankAssignment); }}>
+            <Select value={forms.assignment.event_id} onChange={(v) => setForm('assignment', 'event_id', v)} options={events} label="Event" />
             <Select value={forms.assignment.bar_id} onChange={(v) => setForm('assignment', 'bar_id', v)} options={bars} label="Bar" />
             <Select value={forms.assignment.user_id} onChange={(v) => setForm('assignment', 'user_id', v)} options={employees} label="Employee" />
+            <input placeholder="Salary" value={forms.assignment.salary_amount} onChange={(e) => setForm('assignment', 'salary_amount', e.target.value)} type="number" />
             <button className="primary-button" type="submit"><Plus size={16} />Assign</button>
           </form>
           <div className="inline-tools">
             <Select value={forms.randomEventId} onChange={(v) => setForms((c) => ({ ...c, randomEventId: v }))} options={events} label="Event" />
+            <input placeholder="Salary" value={forms.randomSalary} onChange={(e) => setForms((c) => ({ ...c, randomSalary: e.target.value }))} type="number" />
             <button className="secondary-button" onClick={randomAssign} type="button"><Dice5 size={16} />Random</button>
           </div>
-          <DataTable columns={['Employee', 'Bar']} rows={assignments.map((a) => [userName(users, a.user_id), barName(bars, a.bar_id)])} />
+          <DataTable columns={['Employee', 'Event', 'Bar', 'Salary']} rows={assignments.map((a) => [userName(users, a.user_id), eventName(events, a.event_id), barName(bars, a.bar_id), money(a.salary_amount)])} />
         </ResourcePanel>
 
         <ResourcePanel title="Bar Stock" icon={<Boxes size={18} />}>
@@ -244,6 +288,35 @@ export default function AdminDashboard() {
               <span>Profit <strong>{money(summary.profit)}</strong></span>
             </div>
           )}
+          {insights && (
+            <div className="summary-grid">
+              <span>Top bar <strong>{insights.top_performing_bar?.bar_name || '-'}</strong></span>
+              <span>Top product <strong>{insights.top_selling_product?.product_name || '-'}</strong></span>
+              <span>Top bartender <strong>{insights.highest_earning_bartender?.full_name || '-'}</strong></span>
+              <span>Low stock <strong>{insights.low_stock_alerts.length}</strong></span>
+              <span>Waste items <strong>{insights.waste.length}</strong></span>
+            </div>
+          )}
+          <DataTable columns={['Event', 'Revenue', 'Profit', 'Attendance']} rows={comparison.map((e) => [e.event_name, money(e.revenue), money(e.profit), e.attendance_count])} />
+        </ResourcePanel>
+
+        <ResourcePanel title="End-of-Night Sales" icon={<ReceiptText size={18} />}>
+          <form className="compact-form" onSubmit={recordNight}>
+            <Select value={forms.night.event_id} onChange={(v) => setForm('night', 'event_id', v)} options={events} label="Event" />
+            <Select value={forms.night.bar_id} onChange={(v) => setForm('night', 'bar_id', v)} options={bars} label="Bar" />
+            <Select value={forms.night.product_id} onChange={(v) => setForm('night', 'product_id', v)} options={products} label="Product" />
+            <input placeholder="Remaining" value={forms.night.quantity_remaining} onChange={(e) => setForm('night', 'quantity_remaining', e.target.value)} type="number" />
+            <Select value={forms.night.user_id} onChange={(v) => setForm('night', 'user_id', v)} options={employees} label="Bartender" />
+            <input placeholder="Units sold" value={forms.night.units_sold} onChange={(e) => setForm('night', 'units_sold', e.target.value)} type="number" />
+            <input placeholder="Sales amount" value={forms.night.sales_amount} onChange={(e) => setForm('night', 'sales_amount', e.target.value)} type="number" />
+            <input placeholder="Contribution %" value={forms.night.contribution_pct} onChange={(e) => setForm('night', 'contribution_pct', e.target.value)} type="number" />
+            <button className="primary-button" type="submit"><Plus size={16} />Record</button>
+          </form>
+          <DataTable columns={['Bartender', 'Bar', 'Units', 'Sales', '%']} rows={bartenderSales.map((s) => [userName(users, s.user_id), barName(bars, s.bar_id), s.units_sold, money(s.sales_amount), s.contribution_pct])} />
+        </ResourcePanel>
+
+        <ResourcePanel title="Price History" icon={<BadgeDollarSign size={18} />}>
+          <DataTable columns={['Event', 'Product', 'Old', 'New']} rows={priceHistory.slice(0, 12).map((p) => [eventName(events, p.event_id), productName(products, p.product_id), p.old_selling_price ? money(p.old_selling_price) : '-', money(p.new_selling_price)])} />
         </ResourcePanel>
       </div>
     </main>

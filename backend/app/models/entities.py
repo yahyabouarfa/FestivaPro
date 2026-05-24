@@ -26,6 +26,8 @@ class User(Base, TimestampMixin):
     created_events: Mapped[list["Event"]] = relationship(back_populates="creator", foreign_keys="Event.created_by")
     responsible_bars: Mapped[list["Bar"]] = relationship(back_populates="responsible_user", foreign_keys="Bar.responsible_user_id")
     bar_assignments: Mapped[list["BarAssignment"]] = relationship(back_populates="user")
+    event_salaries: Mapped[list["EventSalary"]] = relationship(back_populates="user")
+    bartender_sales: Mapped[list["BartenderSale"]] = relationship(back_populates="user")
 
 
 class RefreshToken(Base, TimestampMixin):
@@ -50,11 +52,14 @@ class Event(Base, TimestampMixin):
     start_time: Mapped[time] = mapped_column(Time, nullable=False)
     end_time: Mapped[time] = mapped_column(Time, nullable=False)
     status: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="upcoming")
+    attendance_count: Mapped[int] = mapped_column(default=0, nullable=False)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
 
     creator: Mapped[User] = relationship(back_populates="created_events", foreign_keys=[created_by])
     bars: Mapped[list["Bar"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     event_stock: Mapped[list["EventStock"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    event_salaries: Mapped[list["EventSalary"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    bartender_sales: Mapped[list["BartenderSale"]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
 
 class Bar(Base, TimestampMixin):
@@ -71,6 +76,8 @@ class Bar(Base, TimestampMixin):
     responsible_user: Mapped[User] = relationship(back_populates="responsible_bars", foreign_keys=[responsible_user_id])
     stock_items: Mapped[list["BarStock"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
     assignments: Mapped[list["BarAssignment"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
+    event_salaries: Mapped[list["EventSalary"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
+    bartender_sales: Mapped[list["BartenderSale"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
 
 
 class BarAssignment(Base):
@@ -87,6 +94,25 @@ class BarAssignment(Base):
 
     bar: Mapped[Bar] = relationship(back_populates="assignments")
     user: Mapped[User] = relationship(back_populates="bar_assignments")
+
+
+class EventSalary(Base):
+    __tablename__ = "event_salaries"
+    __table_args__ = (
+        Index("ix_event_salaries_event_user_created", "event_id", "user_id", "created_at"),
+        Index("ix_event_salaries_event_bar", "event_id", "bar_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
+    salary_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    event: Mapped[Event] = relationship(back_populates="event_salaries")
+    user: Mapped[User] = relationship(back_populates="event_salaries")
+    bar: Mapped[Bar] = relationship(back_populates="event_salaries")
 
 
 class ProductCategory(Base):
@@ -127,6 +153,7 @@ class EventStock(Base):
 
     event: Mapped[Event] = relationship(back_populates="event_stock")
     product: Mapped[Product] = relationship(back_populates="event_stock")
+    price_history: Mapped[list["PriceHistory"]] = relationship(back_populates="event_stock", cascade="all, delete-orphan")
 
 
 class BarStock(Base):
@@ -143,3 +170,40 @@ class BarStock(Base):
 
     bar: Mapped[Bar] = relationship(back_populates="stock_items")
     product: Mapped[Product] = relationship()
+
+
+class BartenderSale(Base):
+    __tablename__ = "bartender_sales"
+    __table_args__ = (
+        UniqueConstraint("event_id", "bar_id", "user_id", name="uq_bartender_sales_event_bar_user"),
+        Index("ix_bartender_sales_event_user", "event_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    units_sold: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    sales_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    contribution_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    event: Mapped[Event] = relationship(back_populates="bartender_sales")
+    bar: Mapped[Bar] = relationship(back_populates="bartender_sales")
+    user: Mapped[User] = relationship(back_populates="bartender_sales")
+
+
+class PriceHistory(Base):
+    __tablename__ = "price_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_stock_id: Mapped[int] = mapped_column(ForeignKey("event_stock.id", ondelete="CASCADE"), index=True, nullable=False)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True, nullable=False)
+    old_selling_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    new_selling_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    changed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    event_stock: Mapped[EventStock] = relationship(back_populates="price_history")
+    changed_by: Mapped[User | None] = relationship()
