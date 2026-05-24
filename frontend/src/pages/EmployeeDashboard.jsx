@@ -1,0 +1,79 @@
+import { useEffect, useState } from 'react';
+import { BadgeDollarSign, ClipboardList, Store, WalletCards } from 'lucide-react';
+import { api } from '../api/client.js';
+
+function money(value) {
+  return Number(value || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+}
+
+export default function EmployeeDashboard() {
+  const [dashboard, setDashboard] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api
+      .get('/employee/dashboard')
+      .then(({ data }) => setDashboard(data))
+      .catch((err) => setError(err.response?.data?.detail || 'Unable to load dashboard.'));
+  }, []);
+
+  if (error) return <main className="workspace"><div className="error-message">{error}</div></main>;
+  if (!dashboard) return <div className="loading">Loading dashboard...</div>;
+
+  return (
+    <main className="workspace employee-workspace">
+      <div className="page-title">
+        <div>
+          <h1>Bartender dashboard</h1>
+          <p>Your assigned bar, shift salary, current prices, and night-end contribution.</p>
+        </div>
+      </div>
+
+      {!dashboard.assignment ? (
+        <section className="empty-state">
+          <ClipboardList size={38} />
+          <h2>No assignment yet</h2>
+          <p>An admin has not assigned you to a bar for the current event.</p>
+        </section>
+      ) : (
+        <>
+          <section className="employee-summary">
+            <div>
+              <Store size={22} />
+              <span>Assigned bar</span>
+              <strong>{dashboard.bar?.name}</strong>
+            </div>
+            <div>
+              <WalletCards size={22} />
+              <span>Shift salary</span>
+              <strong>{money(dashboard.assignment.shift_salary)}</strong>
+            </div>
+            <div>
+              <BadgeDollarSign size={22} />
+              <span>Your contribution</span>
+              <strong>{money(dashboard.contribution)}</strong>
+            </div>
+          </section>
+
+          <section className="resource-panel">
+            <div className="panel-heading">
+              <h2><ClipboardList size={18} />Product prices</h2>
+              <span className="muted">{dashboard.event?.name}</span>
+            </div>
+            <div className="price-list">
+              {dashboard.prices.map((item) => (
+                <div key={item.product_id} className="price-row">
+                  <div>
+                    <strong>{item.product_name}</strong>
+                    <span>{item.sku} / {item.unit}</span>
+                  </div>
+                  <b>{money(item.price)}</b>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+    </main>
+  );
+}

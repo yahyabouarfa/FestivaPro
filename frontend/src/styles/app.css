@@ -1,0 +1,393 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f4f6f3;
+  color: #17211b;
+  --ink: #17211b;
+  --muted: #657067;
+  --line: #dce3da;
+  --panel: #ffffff;
+  --primary: #12645b;
+  --primary-dark: #0a443d;
+  --accent: #c45334;
+  --gold: #d89c27;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(135deg, rgba(18, 100, 91, 0.92), rgba(23, 33, 27, 0.84)),
+    url('/festival-login.png') center / cover;
+}
+
+.login-panel {
+  width: min(430px, 100%);
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  border-radius: 8px;
+  padding: 28px;
+  box-shadow: 0 22px 65px rgba(0, 0, 0, 0.24);
+}
+
+.login-mark {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 26px;
+}
+
+.login-mark svg,
+.brand svg {
+  color: var(--accent);
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+.login-mark h1,
+.page-title h1 {
+  font-size: clamp(28px, 4vw, 42px);
+  line-height: 1.05;
+}
+
+.login-mark p,
+.page-title p,
+.muted {
+  color: var(--muted);
+}
+
+.form-grid,
+.compact-form {
+  display: grid;
+  gap: 12px;
+}
+
+.compact-form {
+  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+  align-items: end;
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.primary-button,
+.secondary-button,
+.icon-button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.primary-button {
+  background: var(--primary);
+  color: #fff;
+}
+
+.primary-button:hover {
+  background: var(--primary-dark);
+}
+
+.secondary-button {
+  background: #eef3ef;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.icon-button {
+  width: 42px;
+  background: #eef3ef;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.error-message,
+.status-pill {
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff0ea;
+  color: #8d341d;
+  border: 1px solid #f0c1b2;
+}
+
+.status-pill {
+  background: #eef8f5;
+  color: var(--primary-dark);
+  border-color: #c8e4dd;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: #f4f6f3;
+}
+
+.topbar {
+  height: 64px;
+  padding: 0 clamp(16px, 4vw, 42px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(12px);
+}
+
+.brand,
+.identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+}
+
+.brand {
+  text-decoration: none;
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.identity {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.workspace {
+  width: min(1480px, 100%);
+  margin: 0 auto;
+  padding: 30px clamp(16px, 4vw, 42px) 48px;
+}
+
+.page-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.metric-strip,
+.employee-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.metric-strip div,
+.employee-summary div,
+.empty-state {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.metric-strip span,
+.employee-summary strong {
+  display: block;
+  font-size: 26px;
+  font-weight: 800;
+}
+
+.employee-summary div {
+  display: grid;
+  gap: 8px;
+}
+
+.employee-summary svg {
+  color: var(--gold);
+}
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr));
+  gap: 18px;
+}
+
+.resource-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-heading h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 420px;
+}
+
+th,
+td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-size: 14px;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.inline-tools {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(90px, 120px) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.summary-grid,
+.price-list {
+  display: grid;
+  gap: 10px;
+}
+
+.summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+}
+
+.summary-grid span,
+.price-row {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  background: #fbfcfb;
+}
+
+.summary-grid strong {
+  display: block;
+  font-size: 20px;
+}
+
+.price-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.price-row div {
+  display: grid;
+  gap: 3px;
+}
+
+.price-row span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 44px 18px;
+}
+
+.loading {
+  padding: 32px;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    height: auto;
+    padding-block: 12px;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .identity {
+    display: none;
+  }
+
+  .page-title,
+  .panel-heading,
+  .price-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .inline-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-form {
+    grid-template-columns: 1fr;
+  }
+}
