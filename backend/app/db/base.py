@@ -1,27 +1,15 @@
 from app.db.session import Base
-from app.models.entities import (
-    Bar,
-    BarStock,
-    Event,
-    EventProductPrice,
-    Product,
-    RefreshToken,
-    Sale,
-    StaffAssignment,
-    StockMovement,
-    User,
-)
+from app.models.entities import Bar, BarAssignment, BarStock, Event, EventStock, Product, ProductCategory, RefreshToken, User
 
 __all__ = [
     "Base",
     "Bar",
+    "BarAssignment",
     "BarStock",
     "Event",
-    "EventProductPrice",
+    "EventStock",
     "Product",
+    "ProductCategory",
     "RefreshToken",
-    "Sale",
-    "StaffAssignment",
-    "StockMovement",
     "User",
 ]

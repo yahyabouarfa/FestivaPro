@@ -1,11 +1,11 @@
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from sqlalchemy import text
 
 from app.api.deps import CurrentUser, DbSession, require_employee
-from app.models import Bar, Event, EventProductPrice, Product, Sale, StaffAssignment
-from app.schemas.operations import BarRead, EmployeeDashboard, EventRead
+from app.models import Bar, BarAssignment, Event, EventStock, Product, ProductCategory
+from app.schemas.operations import AssignmentRead, BarRead, EmployeeDashboard, EventRead
 
 router = APIRouter(prefix="/employee", tags=["employee"], dependencies=[Depends(require_employee)])
 
@@ -13,42 +13,45 @@ router = APIRouter(prefix="/employee", tags=["employee"], dependencies=[Depends(
 @router.get("/dashboard", response_model=EmployeeDashboard)
 def dashboard(db: DbSession, current_user: CurrentUser):
     assignment = (
-        db.query(StaffAssignment)
-        .join(Event, Event.id == StaffAssignment.event_id)
-        .filter(StaffAssignment.user_id == current_user.id)
-        .order_by(Event.starts_at.desc())
+        db.query(BarAssignment)
+        .join(Bar, Bar.id == BarAssignment.bar_id)
+        .join(Event, Event.id == Bar.event_id)
+        .filter(BarAssignment.user_id == current_user.id)
+        .order_by(Event.event_date.desc(), Event.start_time.desc())
         .first()
     )
     if not assignment:
         return EmployeeDashboard(assignment=None, bar=None, event=None, prices=[], contribution=Decimal(0))
 
     bar = db.get(Bar, assignment.bar_id)
-    event = db.get(Event, assignment.event_id)
+    event = db.get(Event, bar.event_id) if bar else None
     price_rows = (
-        db.query(EventProductPrice, Product)
-        .join(Product, Product.id == EventProductPrice.product_id)
-        .filter(EventProductPrice.event_id == assignment.event_id, Product.is_active.is_(True))
-        .order_by(Product.name)
+        db.query(EventStock, Product, ProductCategory)
+        .join(Product, Product.id == EventStock.product_id)
+        .join(ProductCategory, ProductCategory.id == Product.category_id)
+        .filter(EventStock.event_id == event.id)
+        .order_by(ProductCategory.name, Product.name)
         .all()
+        if event
+        else []
     )
-    contribution = (
-        db.query(func.coalesce(func.sum(Sale.quantity * Sale.unit_price), 0))
-        .filter(Sale.event_id == assignment.event_id, Sale.employee_id == current_user.id)
-        .scalar()
-    )
+    contribution = db.execute(
+        text("SELECT COALESCE(SUM(revenue), 0) FROM bar_stock_financials WHERE bar_id = :bar_id"),
+        {"bar_id": assignment.bar_id},
+    ).scalar()
     return EmployeeDashboard(
-        assignment=assignment,
+        assignment=AssignmentRead.model_validate(assignment),
         bar=BarRead.model_validate(bar) if bar else None,
         event=EventRead.model_validate(event) if event else None,
         prices=[
             {
-                "product_id": price.product_id,
+                "product_id": event_stock.product_id,
                 "product_name": product.name,
-                "sku": product.sku,
+                "category_name": category.name,
                 "unit": product.unit,
-                "price": price.price,
+                "price": event_stock.selling_price_per_unit,
             }
-            for price, product in price_rows
+            for event_stock, product, category in price_rows
         ],
         contribution=Decimal(contribution or 0),
     )
@@ -56,16 +59,29 @@ def dashboard(db: DbSession, current_user: CurrentUser):
 
 @router.get("/contribution")
 def contribution(db: DbSession, current_user: CurrentUser, event_id: int):
-    rows = (
-        db.query(Sale.product_id, func.sum(Sale.quantity).label("quantity"), func.sum(Sale.quantity * Sale.unit_price).label("revenue"))
-        .filter(Sale.event_id == event_id, Sale.employee_id == current_user.id)
-        .group_by(Sale.product_id)
-        .all()
+    assignment = (
+        db.query(BarAssignment)
+        .join(Bar, Bar.id == BarAssignment.bar_id)
+        .filter(BarAssignment.user_id == current_user.id, Bar.event_id == event_id)
+        .first()
     )
-    total = sum(Decimal(row.revenue or 0) for row in rows)
+    if not assignment:
+        return {"event_id": event_id, "employee_id": current_user.id, "total": Decimal(0), "items": []}
+    rows = db.execute(
+        text(
+            """
+            SELECT product_id, quantity_sold, revenue
+            FROM bar_stock_financials
+            WHERE bar_id = :bar_id
+            ORDER BY product_id
+            """
+        ),
+        {"bar_id": assignment.bar_id},
+    ).mappings().all()
+    total = sum(Decimal(row["revenue"] or 0) for row in rows)
     return {
         "event_id": event_id,
         "employee_id": current_user.id,
         "total": total,
-        "items": [{"product_id": row.product_id, "quantity": row.quantity, "revenue": row.revenue} for row in rows],
+        "items": [{"product_id": row["product_id"], "quantity": row["quantity_sold"], "revenue": row["revenue"]} for row in rows],
     }

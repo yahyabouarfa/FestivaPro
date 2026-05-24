@@ -18,10 +18,17 @@ Update `.env` with your MySQL credentials, then create the database in phpMyAdmi
 CREATE DATABASE festivapro CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Run migrations:
+Run migrations. The initial migration creates the full event/bar/product/stock schema and seeds demo data:
 
 ```powershell
 alembic upgrade head
+```
+
+Seeded admin login:
+
+```text
+Email: admin@festivapro.local
+Password: password
 ```
 
 Start the API:

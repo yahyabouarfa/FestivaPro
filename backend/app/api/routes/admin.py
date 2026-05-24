@@ -3,22 +3,12 @@ from random import shuffle
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbSession, require_admin
 from app.core.security import hash_password
-from app.models import (
-    Bar,
-    BarStock,
-    Event,
-    EventProductPrice,
-    Product,
-    Sale,
-    StaffAssignment,
-    StockMovement,
-    User,
-)
+from app.models import Bar, BarAssignment, BarStock, Event, EventStock, Product, ProductCategory, User
 from app.schemas.common import ApiMessage, MoneySummary
 from app.schemas.operations import (
     AssignmentCreate,
@@ -28,17 +18,15 @@ from app.schemas.operations import (
     BarUpdate,
     EventCreate,
     EventRead,
+    EventStockRead,
+    EventStockUpsert,
     EventUpdate,
-    PriceRead,
-    PriceUpsert,
+    ProductCategoryCreate,
+    ProductCategoryRead,
     ProductCreate,
     ProductRead,
     ProductUpdate,
     RandomAssignmentRequest,
-    SaleCreate,
-    SaleRead,
-    StockMovementCreate,
-    StockMovementRead,
     StockRead,
     StockUpsert,
 )
@@ -69,6 +57,13 @@ def apply_updates(record, payload) -> None:
             setattr(record, "hashed_password", hash_password(value))
         else:
             setattr(record, field, value)
+
+
+def require_employee(db: DbSession, user_id: int) -> User:
+    user = get_or_404(db, User, user_id)
+    if user.role != "employee":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only employees can be assigned to bars.")
+    return user
 
 
 @router.get("/users", response_model=list[UserRead])
@@ -108,22 +103,21 @@ def update_user(user_id: int, payload: UserUpdate, db: DbSession, _: AdminUser):
 def delete_user(user_id: int, db: DbSession, current_user: AdminUser):
     if user_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admins cannot delete their own account.")
-    user = get_or_404(db, User, user_id)
-    db.delete(user)
+    db.delete(get_or_404(db, User, user_id))
     commit_or_409(db)
     return ApiMessage(message="User deleted.")
 
 
 @router.get("/events", response_model=list[EventRead])
 def list_events(db: DbSession, _: AdminUser):
-    return db.query(Event).order_by(Event.starts_at.desc()).all()
+    return db.query(Event).order_by(Event.event_date.desc(), Event.start_time.desc()).all()
 
 
 @router.post("/events", response_model=EventRead, status_code=status.HTTP_201_CREATED)
-def create_event(payload: EventCreate, db: DbSession, _: AdminUser):
-    if payload.ends_at <= payload.starts_at:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Event end time must be after start time.")
-    event = Event(**payload.model_dump())
+def create_event(payload: EventCreate, db: DbSession, current_user: AdminUser):
+    if payload.end_time == payload.start_time:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Event start and end times cannot be identical.")
+    event = Event(**payload.model_dump(), created_by=current_user.id)
     db.add(event)
     commit_or_409(db)
     db.refresh(event)
@@ -134,8 +128,8 @@ def create_event(payload: EventCreate, db: DbSession, _: AdminUser):
 def update_event(event_id: int, payload: EventUpdate, db: DbSession, _: AdminUser):
     event = get_or_404(db, Event, event_id)
     apply_updates(event, payload)
-    if event.ends_at <= event.starts_at:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Event end time must be after start time.")
+    if event.end_time == event.start_time:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Event start and end times cannot be identical.")
     commit_or_409(db)
     db.refresh(event)
     return event
@@ -143,8 +137,7 @@ def update_event(event_id: int, payload: EventUpdate, db: DbSession, _: AdminUse
 
 @router.delete("/events/{event_id}", response_model=ApiMessage)
 def delete_event(event_id: int, db: DbSession, _: AdminUser):
-    event = get_or_404(db, Event, event_id)
-    db.delete(event)
+    db.delete(get_or_404(db, Event, event_id))
     commit_or_409(db)
     return ApiMessage(message="Event deleted.")
 
@@ -160,6 +153,7 @@ def list_bars(db: DbSession, _: AdminUser, event_id: int | None = None):
 @router.post("/bars", response_model=BarRead, status_code=status.HTTP_201_CREATED)
 def create_bar(payload: BarCreate, db: DbSession, _: AdminUser):
     get_or_404(db, Event, payload.event_id)
+    require_employee(db, payload.responsible_user_id)
     bar = Bar(**payload.model_dump())
     db.add(bar)
     commit_or_409(db)
@@ -172,6 +166,8 @@ def update_bar(bar_id: int, payload: BarUpdate, db: DbSession, _: AdminUser):
     bar = get_or_404(db, Bar, bar_id)
     if payload.event_id:
         get_or_404(db, Event, payload.event_id)
+    if payload.responsible_user_id:
+        require_employee(db, payload.responsible_user_id)
     apply_updates(bar, payload)
     commit_or_409(db)
     db.refresh(bar)
@@ -180,10 +176,23 @@ def update_bar(bar_id: int, payload: BarUpdate, db: DbSession, _: AdminUser):
 
 @router.delete("/bars/{bar_id}", response_model=ApiMessage)
 def delete_bar(bar_id: int, db: DbSession, _: AdminUser):
-    bar = get_or_404(db, Bar, bar_id)
-    db.delete(bar)
+    db.delete(get_or_404(db, Bar, bar_id))
     commit_or_409(db)
     return ApiMessage(message="Bar deleted.")
+
+
+@router.get("/product-categories", response_model=list[ProductCategoryRead])
+def list_categories(db: DbSession, _: AdminUser):
+    return db.query(ProductCategory).order_by(ProductCategory.name).all()
+
+
+@router.post("/product-categories", response_model=ProductCategoryRead, status_code=status.HTTP_201_CREATED)
+def create_category(payload: ProductCategoryCreate, db: DbSession, _: AdminUser):
+    category = ProductCategory(**payload.model_dump())
+    db.add(category)
+    commit_or_409(db)
+    db.refresh(category)
+    return category
 
 
 @router.get("/products", response_model=list[ProductRead])
@@ -193,6 +202,7 @@ def list_products(db: DbSession, _: AdminUser):
 
 @router.post("/products", response_model=ProductRead, status_code=status.HTTP_201_CREATED)
 def create_product(payload: ProductCreate, db: DbSession, _: AdminUser):
+    get_or_404(db, ProductCategory, payload.category_id)
     product = Product(**payload.model_dump())
     db.add(product)
     commit_or_409(db)
@@ -203,6 +213,8 @@ def create_product(payload: ProductCreate, db: DbSession, _: AdminUser):
 @router.patch("/products/{product_id}", response_model=ProductRead)
 def update_product(product_id: int, payload: ProductUpdate, db: DbSession, _: AdminUser):
     product = get_or_404(db, Product, product_id)
+    if payload.category_id:
+        get_or_404(db, ProductCategory, payload.category_id)
     apply_updates(product, payload)
     commit_or_409(db)
     db.refresh(product)
@@ -211,69 +223,52 @@ def update_product(product_id: int, payload: ProductUpdate, db: DbSession, _: Ad
 
 @router.delete("/products/{product_id}", response_model=ApiMessage)
 def delete_product(product_id: int, db: DbSession, _: AdminUser):
-    product = get_or_404(db, Product, product_id)
-    db.delete(product)
+    db.delete(get_or_404(db, Product, product_id))
     commit_or_409(db)
     return ApiMessage(message="Product deleted.")
 
 
-@router.get("/prices", response_model=list[PriceRead])
-def list_prices(db: DbSession, _: AdminUser, event_id: int | None = None):
-    query = db.query(EventProductPrice).order_by(EventProductPrice.event_id.desc())
+@router.get("/event-stock", response_model=list[EventStockRead])
+def list_event_stock(db: DbSession, _: AdminUser, event_id: int | None = None):
+    query = db.query(EventStock).order_by(EventStock.event_id.desc(), EventStock.product_id)
     if event_id:
-        query = query.filter(EventProductPrice.event_id == event_id)
+        query = query.filter(EventStock.event_id == event_id)
     return query.all()
 
 
-@router.post("/prices", response_model=PriceRead)
-def upsert_price(payload: PriceUpsert, db: DbSession, _: AdminUser):
+@router.post("/event-stock", response_model=EventStockRead)
+def upsert_event_stock(payload: EventStockUpsert, db: DbSession, _: AdminUser):
     get_or_404(db, Event, payload.event_id)
     get_or_404(db, Product, payload.product_id)
-    price = (
-        db.query(EventProductPrice)
-        .filter(EventProductPrice.event_id == payload.event_id, EventProductPrice.product_id == payload.product_id)
-        .first()
-    )
-    if not price:
-        price = EventProductPrice(**payload.model_dump())
-        db.add(price)
+    stock = db.query(EventStock).filter(EventStock.event_id == payload.event_id, EventStock.product_id == payload.product_id).first()
+    if not stock:
+        stock = EventStock(**payload.model_dump())
+        db.add(stock)
     else:
-        price.price = payload.price
-        price.cost_price = payload.cost_price
+        apply_updates(stock, payload)
     commit_or_409(db)
-    db.refresh(price)
-    return price
+    db.refresh(stock)
+    return stock
 
 
 @router.get("/assignments", response_model=list[AssignmentRead])
 def list_assignments(db: DbSession, _: AdminUser, event_id: int | None = None, user_id: int | None = None):
-    query = db.query(StaffAssignment).order_by(StaffAssignment.created_at.desc())
+    query = db.query(BarAssignment).join(Bar, Bar.id == BarAssignment.bar_id).order_by(BarAssignment.assigned_at.desc())
     if event_id:
-        query = query.filter(StaffAssignment.event_id == event_id)
+        query = query.filter(Bar.event_id == event_id)
     if user_id:
-        query = query.filter(StaffAssignment.user_id == user_id)
+        query = query.filter(BarAssignment.user_id == user_id)
     return query.all()
 
 
 @router.post("/assignments", response_model=AssignmentRead, status_code=status.HTTP_201_CREATED)
 def create_assignment(payload: AssignmentCreate, db: DbSession, _: AdminUser):
-    bar = get_or_404(db, Bar, payload.bar_id)
-    user = get_or_404(db, User, payload.user_id)
-    if bar.event_id != payload.event_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Bar does not belong to the selected event.")
-    if user.role != "employee":
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only employees can be assigned to bars.")
-    assignment = (
-        db.query(StaffAssignment)
-        .filter(StaffAssignment.event_id == payload.event_id, StaffAssignment.user_id == payload.user_id)
-        .first()
-    )
+    get_or_404(db, Bar, payload.bar_id)
+    require_employee(db, payload.user_id)
+    assignment = db.query(BarAssignment).filter(BarAssignment.bar_id == payload.bar_id, BarAssignment.user_id == payload.user_id).first()
     if not assignment:
-        assignment = StaffAssignment(**payload.model_dump())
+        assignment = BarAssignment(**payload.model_dump())
         db.add(assignment)
-    else:
-        assignment.bar_id = payload.bar_id
-        assignment.shift_salary = payload.shift_salary
     commit_or_409(db)
     db.refresh(assignment)
     return assignment
@@ -289,21 +284,15 @@ def random_assignments(payload: RandomAssignmentRequest, db: DbSession, _: Admin
     if not employees:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Create at least one active employee before random assignment.")
     shuffle(employees)
-    saved: list[StaffAssignment] = []
-    for index, employee in enumerate(employees):
-        bar = bars[index % len(bars)]
-        assignment = (
-            db.query(StaffAssignment)
-            .filter(StaffAssignment.event_id == payload.event_id, StaffAssignment.user_id == employee.id)
-            .first()
-        )
-        if not assignment:
-            assignment = StaffAssignment(event_id=payload.event_id, user_id=employee.id, bar_id=bar.id, shift_salary=payload.shift_salary)
-            db.add(assignment)
-        else:
-            assignment.bar_id = bar.id
-            assignment.shift_salary = payload.shift_salary
-        saved.append(assignment)
+    saved: list[BarAssignment] = []
+    for bar_index, bar in enumerate(bars):
+        for offset in range(3):
+            employee = employees[(bar_index * 3 + offset) % len(employees)]
+            assignment = db.query(BarAssignment).filter(BarAssignment.bar_id == bar.id, BarAssignment.user_id == employee.id).first()
+            if not assignment:
+                assignment = BarAssignment(bar_id=bar.id, user_id=employee.id)
+                db.add(assignment)
+            saved.append(assignment)
     commit_or_409(db)
     return saved
 
@@ -318,63 +307,42 @@ def list_stock(db: DbSession, _: AdminUser, bar_id: int | None = None):
 
 @router.post("/stock", response_model=StockRead)
 def upsert_stock(payload: StockUpsert, db: DbSession, _: AdminUser):
-    get_or_404(db, Bar, payload.bar_id)
+    bar = get_or_404(db, Bar, payload.bar_id)
     get_or_404(db, Product, payload.product_id)
+    event_stock = db.query(EventStock).filter(EventStock.event_id == bar.event_id, EventStock.product_id == payload.product_id).first()
+    if not event_stock:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Create event stock for this product before assigning it to a bar.")
+    if payload.quantity_remaining > payload.quantity_allocated:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Remaining quantity cannot exceed allocated quantity.")
     stock = db.query(BarStock).filter(BarStock.bar_id == payload.bar_id, BarStock.product_id == payload.product_id).first()
     if not stock:
         stock = BarStock(**payload.model_dump())
         db.add(stock)
     else:
-        stock.opening_quantity = payload.opening_quantity
-        stock.current_quantity = payload.current_quantity
+        stock.quantity_allocated = payload.quantity_allocated
+        stock.quantity_remaining = payload.quantity_remaining
     commit_or_409(db)
     db.refresh(stock)
     return stock
 
 
-@router.post("/stock/movements", response_model=StockMovementRead, status_code=status.HTTP_201_CREATED)
-def create_stock_movement(payload: StockMovementCreate, db: DbSession, current_user: AdminUser):
-    stock = db.query(BarStock).filter(BarStock.bar_id == payload.bar_id, BarStock.product_id == payload.product_id).first()
-    if not stock:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stock item not found for this bar and product.")
-    stock.current_quantity += payload.quantity_change
-    movement = StockMovement(**payload.model_dump(), created_by_id=current_user.id)
-    db.add(movement)
-    commit_or_409(db)
-    db.refresh(movement)
-    return movement
-
-
-@router.post("/sales", response_model=SaleRead, status_code=status.HTTP_201_CREATED)
-def create_sale(payload: SaleCreate, db: DbSession, _: AdminUser):
-    assignment = (
-        db.query(StaffAssignment)
-        .filter(StaffAssignment.event_id == payload.event_id, StaffAssignment.user_id == payload.employee_id, StaffAssignment.bar_id == payload.bar_id)
-        .first()
-    )
-    if not assignment:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Employee is not assigned to this bar for this event.")
-    sale = Sale(**payload.model_dump())
-    db.add(sale)
-    stock = db.query(BarStock).filter(BarStock.bar_id == payload.bar_id, BarStock.product_id == payload.product_id).first()
-    if stock:
-        stock.current_quantity -= payload.quantity
-    commit_or_409(db)
-    db.refresh(sale)
-    return sale
-
-
 @router.get("/reports/summary", response_model=MoneySummary)
 def financial_summary(db: DbSession, _: AdminUser, event_id: int):
-    revenue = db.query(func.coalesce(func.sum(Sale.quantity * Sale.unit_price), 0)).filter(Sale.event_id == event_id).scalar()
-    cost = (
-        db.query(func.coalesce(func.sum(Sale.quantity * EventProductPrice.cost_price), 0))
-        .join(EventProductPrice, (EventProductPrice.event_id == Sale.event_id) & (EventProductPrice.product_id == Sale.product_id))
-        .filter(Sale.event_id == event_id)
-        .scalar()
-    )
-    salaries = db.query(func.coalesce(func.sum(StaffAssignment.shift_salary), 0)).filter(StaffAssignment.event_id == event_id).scalar()
-    revenue = Decimal(revenue or 0)
-    cost = Decimal(cost or 0)
-    salaries = Decimal(salaries or 0)
-    return MoneySummary(revenue=revenue, cost=cost, salaries=salaries, profit=revenue - cost - salaries)
+    row = db.execute(
+        text(
+            """
+            SELECT
+              COALESCE(SUM(revenue), 0) AS revenue,
+              COALESCE(SUM(cost), 0) AS cost,
+              COALESCE(SUM(profit), 0) AS stock_profit
+            FROM bar_stock_financials
+            WHERE event_id = :event_id
+            """
+        ),
+        {"event_id": event_id},
+    ).mappings().one()
+    salaries = db.query(func.coalesce(func.count(BarAssignment.id) * 300, 0)).join(Bar, Bar.id == BarAssignment.bar_id).filter(Bar.event_id == event_id).scalar()
+    revenue = Decimal(row["revenue"] or 0)
+    cost = Decimal(row["cost"] or 0)
+    salary_total = Decimal(salaries or 0)
+    return MoneySummary(revenue=revenue, cost=cost, salaries=salary_total, profit=Decimal(row["stock_profit"] or 0) - salary_total)

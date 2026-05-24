@@ -1,4 +1,3 @@
-from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
@@ -17,8 +16,3 @@ class MoneySummary(BaseModel):
     cost: Decimal
     salaries: Decimal
     profit: Decimal
-
-
-class DateRange(BaseModel):
-    starts_at: datetime
-    ends_at: datetime

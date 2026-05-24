@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Computed, Date, DateTime, ForeignKey, Index, Numeric, String, Time, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -23,7 +23,9 @@ class User(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    assignments: Mapped[list["StaffAssignment"]] = relationship(back_populates="user")
+    created_events: Mapped[list["Event"]] = relationship(back_populates="creator", foreign_keys="Event.created_by")
+    responsible_bars: Mapped[list["Bar"]] = relationship(back_populates="responsible_user", foreign_keys="Bar.responsible_user_id")
+    bar_assignments: Mapped[list["BarAssignment"]] = relationship(back_populates="user")
 
 
 class RefreshToken(Base, TimestampMixin):
@@ -43,13 +45,16 @@ class Event(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
-    location: Mapped[str | None] = mapped_column(String(255))
-    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    location: Mapped[str] = mapped_column(String(80), nullable=False)
+    event_date: Mapped[date] = mapped_column(Date, nullable=False)
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="upcoming")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
 
+    creator: Mapped[User] = relationship(back_populates="created_events", foreign_keys=[created_by])
     bars: Mapped[list["Bar"]] = relationship(back_populates="event", cascade="all, delete-orphan")
-    prices: Mapped[list["EventProductPrice"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    event_stock: Mapped[list["EventStock"]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
 
 class Bar(Base, TimestampMixin):
@@ -59,100 +64,82 @@ class Bar(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    location: Mapped[str | None] = mapped_column(String(255))
-    starting_cash: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    responsible_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     event: Mapped[Event] = relationship(back_populates="bars")
+    responsible_user: Mapped[User] = relationship(back_populates="responsible_bars", foreign_keys=[responsible_user_id])
     stock_items: Mapped[list["BarStock"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
-    assignments: Mapped[list["StaffAssignment"]] = relationship(back_populates="bar")
+    assignments: Mapped[list["BarAssignment"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
 
 
-class Product(Base, TimestampMixin):
-    __tablename__ = "products"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(140), nullable=False)
-    sku: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
-    unit: Mapped[str] = mapped_column(String(40), default="unit", nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    prices: Mapped[list["EventProductPrice"]] = relationship(back_populates="product")
-
-
-class EventProductPrice(Base, TimestampMixin):
-    __tablename__ = "event_product_prices"
-    __table_args__ = (UniqueConstraint("event_id", "product_id", name="uq_event_product_price"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True, nullable=False)
-    price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    cost_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
-
-    event: Mapped[Event] = relationship(back_populates="prices")
-    product: Mapped[Product] = relationship(back_populates="prices")
-
-
-class StaffAssignment(Base, TimestampMixin):
-    __tablename__ = "staff_assignments"
+class BarAssignment(Base):
+    __tablename__ = "bar_assignments"
     __table_args__ = (
-        UniqueConstraint("event_id", "user_id", name="uq_assignment_event_user"),
-        Index("ix_assignment_user_bar", "user_id", "bar_id"),
+        UniqueConstraint("bar_id", "user_id", name="uq_bar_assignment_user"),
+        Index("ix_bar_assignments_user_bar", "user_id", "bar_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
     bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
-    shift_salary: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    event: Mapped[Event] = relationship()
     bar: Mapped[Bar] = relationship(back_populates="assignments")
-    user: Mapped[User] = relationship(back_populates="assignments")
+    user: Mapped[User] = relationship(back_populates="bar_assignments")
 
 
-class BarStock(Base, TimestampMixin):
+class ProductCategory(Base):
+    __tablename__ = "product_categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    products: Mapped[list["Product"]] = relationship(back_populates="category")
+
+
+class Product(Base):
+    __tablename__ = "products"
+    __table_args__ = (UniqueConstraint("name", "category_id", name="uq_products_name_category"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(140), nullable=False)
+    category_id: Mapped[int] = mapped_column(ForeignKey("product_categories.id", ondelete="RESTRICT"), index=True, nullable=False)
+    unit: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    category: Mapped[ProductCategory] = relationship(back_populates="products")
+    event_stock: Mapped[list["EventStock"]] = relationship(back_populates="product")
+
+
+class EventStock(Base):
+    __tablename__ = "event_stock"
+    __table_args__ = (UniqueConstraint("event_id", "product_id", name="uq_event_stock_product"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True, nullable=False)
+    quantity_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    bought_price_per_unit: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    selling_price_per_unit: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    event: Mapped[Event] = relationship(back_populates="event_stock")
+    product: Mapped[Product] = relationship(back_populates="event_stock")
+
+
+class BarStock(Base):
     __tablename__ = "bar_stock"
     __table_args__ = (UniqueConstraint("bar_id", "product_id", name="uq_bar_stock_product"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True, nullable=False)
-    opening_quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
-    current_quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True, nullable=False)
+    quantity_allocated: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    quantity_sold: Mapped[Decimal] = mapped_column(Numeric(10, 2), Computed("quantity_allocated - quantity_remaining"), nullable=False)
+    quantity_remaining: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     bar: Mapped[Bar] = relationship(back_populates="stock_items")
     product: Mapped[Product] = relationship()
-
-
-class StockMovement(Base, TimestampMixin):
-    __tablename__ = "stock_movements"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True, nullable=False)
-    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
-    quantity_change: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    reason: Mapped[str] = mapped_column(String(60), nullable=False)
-    note: Mapped[str | None] = mapped_column(Text)
-
-    bar: Mapped[Bar] = relationship()
-    product: Mapped[Product] = relationship()
-    created_by: Mapped[User | None] = relationship()
-
-
-class Sale(Base, TimestampMixin):
-    __tablename__ = "sales"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
-    bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True, nullable=False)
-    employee_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
-    quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-
-    event: Mapped[Event] = relationship()
-    bar: Mapped[Bar] = relationship()
-    product: Mapped[Product] = relationship()
-    employee: Mapped[User] = relationship()

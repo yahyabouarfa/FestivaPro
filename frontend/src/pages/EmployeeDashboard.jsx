@@ -65,7 +65,7 @@ export default function EmployeeDashboard() {
                 <div key={item.product_id} className="price-row">
                   <div>
                     <strong>{item.product_name}</strong>
-                    <span>{item.sku} / {item.unit}</span>
+                    <span>{item.category_name} / {item.unit}</span>
                   </div>
                   <b>{money(item.price)}</b>
                 </div>

@@ -1,25 +1,23 @@
 from app.models.entities import (
     Bar,
+    BarAssignment,
     BarStock,
     Event,
-    EventProductPrice,
+    EventStock,
     Product,
+    ProductCategory,
     RefreshToken,
-    Sale,
-    StaffAssignment,
-    StockMovement,
     User,
 )
 
 __all__ = [
     "Bar",
+    "BarAssignment",
     "BarStock",
     "Event",
-    "EventProductPrice",
+    "EventStock",
     "Product",
+    "ProductCategory",
     "RefreshToken",
-    "Sale",
-    "StaffAssignment",
-    "StockMovement",
     "User",
 ]
