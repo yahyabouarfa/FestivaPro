@@ -1,7 +1,7 @@
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Computed, Date, DateTime, ForeignKey, Index, Numeric, String, Text, Time, UniqueConstraint, func
+from sqlalchemy import Boolean, Computed, Date, DateTime, ForeignKey, Index, LargeBinary, Numeric, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -50,17 +50,46 @@ class Event(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     location: Mapped[str] = mapped_column(String(80), nullable=False)
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
     start_time: Mapped[time] = mapped_column(Time, nullable=False)
     end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    total_nights: Mapped[int] = mapped_column(default=1, nullable=False)
+    total_nights_planned: Mapped[int] = mapped_column(default=1, nullable=False)
     status: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="upcoming")
     attendance_count: Mapped[int] = mapped_column(default=0, nullable=False)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
 
     creator: Mapped[User] = relationship(back_populates="created_events", foreign_keys=[created_by])
+    nights: Mapped[list["EventNight"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     bars: Mapped[list["Bar"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     event_stock: Mapped[list["EventStock"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     event_salaries: Mapped[list["EventSalary"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     bartender_sales: Mapped[list["BartenderSale"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    profit_snapshots: Mapped[list["ProfitSnapshot"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    pdf_reports: Mapped[list["PdfReport"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+
+
+class EventNight(Base):
+    __tablename__ = "event_nights"
+    __table_args__ = (
+        UniqueConstraint("event_id", "night_number", name="uq_event_nights_event_number"),
+        Index("ix_event_nights_event_status", "event_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    night_number: Mapped[int] = mapped_column(nullable=False)
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="upcoming")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    event: Mapped[Event] = relationship(back_populates="nights")
+    bar_stock: Mapped[list["BarNightStock"]] = relationship(back_populates="event_night", cascade="all, delete-orphan")
+    profit_snapshots: Mapped[list["ProfitSnapshot"]] = relationship(back_populates="event_night", cascade="all, delete-orphan")
+    night_assignments: Mapped[list["NightBarAssignment"]] = relationship(back_populates="event_night", cascade="all, delete-orphan")
+    bartender_cash: Mapped[list["BartenderCash"]] = relationship(back_populates="event_night", cascade="all, delete-orphan")
+    bar_summaries: Mapped[list["BarNightSummary"]] = relationship(back_populates="event_night", cascade="all, delete-orphan")
+    pdf_reports: Mapped[list["PdfReport"]] = relationship(back_populates="event_night", cascade="all, delete-orphan")
 
 
 class Bar(Base, TimestampMixin):
@@ -76,9 +105,15 @@ class Bar(Base, TimestampMixin):
     event: Mapped[Event] = relationship(back_populates="bars")
     responsible_user: Mapped[User] = relationship(back_populates="responsible_bars", foreign_keys=[responsible_user_id])
     stock_items: Mapped[list["BarStock"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
+    night_stock_items: Mapped[list["BarNightStock"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
     assignments: Mapped[list["BarAssignment"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
     event_salaries: Mapped[list["EventSalary"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
     bartender_sales: Mapped[list["BartenderSale"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
+    profit_snapshots: Mapped[list["ProfitSnapshot"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
+    night_assignments: Mapped[list["NightBarAssignment"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
+    bartender_cash: Mapped[list["BartenderCash"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
+    night_summaries: Mapped[list["BarNightSummary"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
+    pdf_reports: Mapped[list["PdfReport"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
 
 
 class BarAssignment(Base):
@@ -147,9 +182,9 @@ class EventStock(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True, nullable=False)
-    quantity_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    bought_price_per_unit: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    selling_price_per_unit: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    total_qty_purchased: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    bought_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    selling_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     event: Mapped[Event] = relationship(back_populates="event_stock")
@@ -171,6 +206,98 @@ class BarStock(Base):
 
     bar: Mapped[Bar] = relationship(back_populates="stock_items")
     product: Mapped[Product] = relationship()
+
+
+class BarNightStock(Base):
+    __tablename__ = "bar_night_stock"
+    __table_args__ = (
+        UniqueConstraint("bar_id", "event_night_id", "product_id", name="uq_bar_night_stock_product"),
+        Index("ix_bar_night_stock_night_bar", "event_night_id", "bar_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
+    event_night_id: Mapped[int] = mapped_column(ForeignKey("event_nights.id", ondelete="CASCADE"), index=True, nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True, nullable=False)
+    qty_opening: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    qty_top_up: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    qty_closing: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    qty_sold: Mapped[Decimal] = mapped_column(Numeric(10, 2), Computed("qty_opening + qty_top_up - COALESCE(qty_closing, 0)"), nullable=False)
+    qty_used: Mapped[Decimal] = mapped_column(Numeric(10, 2), Computed("qty_opening + qty_top_up - COALESCE(qty_closing, 0)"), nullable=False)
+    bought_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    selling_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    expected_revenue: Mapped[Decimal] = mapped_column(Numeric(12, 2), Computed("qty_opening * selling_price"), nullable=False)
+    expected_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), Computed("qty_opening * bought_price"), nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    bar: Mapped[Bar] = relationship(back_populates="night_stock_items")
+    event_night: Mapped[EventNight] = relationship(back_populates="bar_stock")
+    product: Mapped[Product] = relationship()
+
+
+class NightBarAssignment(Base):
+    __tablename__ = "night_bar_assignments"
+    __table_args__ = (
+        UniqueConstraint("event_night_id", "bar_id", "user_id", "role", name="uq_night_bar_assignment_user_role"),
+        Index("ix_night_bar_assignments_night_bar", "event_night_id", "bar_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_night_id: Mapped[int] = mapped_column(ForeignKey("event_nights.id", ondelete="CASCADE"), index=True, nullable=False)
+    bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    salary_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    event_night: Mapped[EventNight] = relationship(back_populates="night_assignments")
+    bar: Mapped[Bar] = relationship(back_populates="night_assignments")
+    user: Mapped[User] = relationship()
+
+
+class BartenderCash(Base):
+    __tablename__ = "bartender_cash"
+    __table_args__ = (
+        UniqueConstraint("event_night_id", "bar_id", "user_id", name="uq_bartender_cash_night_bar_user"),
+        Index("ix_bartender_cash_night_bar", "event_night_id", "bar_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_night_id: Mapped[int] = mapped_column(ForeignKey("event_nights.id", ondelete="CASCADE"), index=True, nullable=False)
+    bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    cash_collected: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    event_night: Mapped[EventNight] = relationship(back_populates="bartender_cash")
+    bar: Mapped[Bar] = relationship(back_populates="bartender_cash")
+    user: Mapped[User] = relationship()
+
+
+class BarNightSummary(Base):
+    __tablename__ = "bar_night_summary"
+    __table_args__ = (
+        UniqueConstraint("event_night_id", "bar_id", name="uq_bar_night_summary_night_bar"),
+        Index("ix_bar_night_summary_night_bar", "event_night_id", "bar_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bar_id: Mapped[int] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True, nullable=False)
+    event_night_id: Mapped[int] = mapped_column(ForeignKey("event_nights.id", ondelete="CASCADE"), index=True, nullable=False)
+    total_cash_collected: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    expected_cash: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    cash_discrepancy: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    stock_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    staff_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    gross_profit: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    net_profit: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    expected_profit: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    is_closed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    event_night: Mapped[EventNight] = relationship(back_populates="bar_summaries")
+    bar: Mapped[Bar] = relationship(back_populates="night_summaries")
 
 
 class BartenderSale(Base):
@@ -208,6 +335,53 @@ class PriceHistory(Base):
 
     event_stock: Mapped[EventStock] = relationship(back_populates="price_history")
     changed_by: Mapped[User | None] = relationship()
+
+
+class ProfitSnapshot(Base):
+    __tablename__ = "profit_snapshots"
+    __table_args__ = (
+        Index("ix_profit_snapshots_event_level", "event_id", "snapshot_level"),
+        Index("ix_profit_snapshots_night_bar", "event_night_id", "bar_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    event_night_id: Mapped[int | None] = mapped_column(ForeignKey("event_nights.id", ondelete="CASCADE"), index=True)
+    bar_id: Mapped[int | None] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True)
+    expected_revenue: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    actual_revenue: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    expected_profit: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    actual_profit: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    staff_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    net_profit: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    snapshot_level: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    event: Mapped[Event] = relationship(back_populates="profit_snapshots")
+    event_night: Mapped[EventNight | None] = relationship(back_populates="profit_snapshots")
+    bar: Mapped[Bar | None] = relationship(back_populates="profit_snapshots")
+
+
+class PdfReport(Base):
+    __tablename__ = "pdf_reports"
+    __table_args__ = (
+        Index("ix_pdf_reports_event_night_type", "event_id", "event_night_id", "report_type"),
+        Index("ix_pdf_reports_bar_type", "bar_id", "report_type"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    event_night_id: Mapped[int | None] = mapped_column(ForeignKey("event_nights.id", ondelete="CASCADE"), index=True)
+    bar_id: Mapped[int | None] = mapped_column(ForeignKey("bars.id", ondelete="CASCADE"), index=True)
+    report_type: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), default="application/pdf", nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary(length=(16 * 1024 * 1024)), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    event: Mapped[Event] = relationship(back_populates="pdf_reports")
+    event_night: Mapped[EventNight | None] = relationship(back_populates="pdf_reports")
+    bar: Mapped[Bar | None] = relationship(back_populates="pdf_reports")
 
 
 class AuditLog(Base):

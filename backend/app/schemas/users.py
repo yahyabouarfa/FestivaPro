@@ -1,13 +1,13 @@
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
 
 
 class UserBase(BaseModel):
     full_name: str = Field(min_length=2, max_length=150)
-    email: EmailStr
+    email: str = Field(min_length=3, max_length=255)
     phone_number: str | None = Field(default=None, max_length=40)
     role: str = Field(pattern="^(admin|employee)$")
     is_active: bool = True
@@ -19,7 +19,7 @@ class UserCreate(UserBase):
 
 class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=150)
-    email: EmailStr | None = None
+    email: str | None = Field(default=None, min_length=3, max_length=255)
     phone_number: str | None = Field(default=None, max_length=40)
     role: str | None = Field(default=None, pattern="^(admin|employee)$")
     password: str | None = Field(default=None, min_length=8)
@@ -29,7 +29,7 @@ class UserUpdate(BaseModel):
 class UserRead(ORMModel):
     id: int
     full_name: str
-    email: EmailStr
+    email: str
     phone_number: str | None
     role: str
     created_at: datetime

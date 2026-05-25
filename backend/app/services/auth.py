@@ -8,9 +8,9 @@ from app.models import RefreshToken, User
 def authenticate_user(db: Session, email: str, password: str) -> User:
     user = db.query(User).filter(User.email == email).first()
     if not user or not verify_password(password, user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Email ou mot de passe invalide.")
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is inactive.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Ce compte est inactif.")
     return user
 
 
@@ -29,15 +29,15 @@ def rotate_refresh_token(db: Session, refresh_token: str) -> tuple[User, str, st
         payload = decode_token(refresh_token, "refresh")
         user_id = int(payload["sub"])
     except (KeyError, TypeError, ValueError):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is invalid or expired.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Le jeton de rafraîchissement est invalide ou expiré.")
 
     stored = db.query(RefreshToken).filter(RefreshToken.token_hash == hash_token(refresh_token)).first()
     if not stored or stored.revoked_at is not None or stored.expires_at < utcnow():
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token has expired or was revoked.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Le jeton de rafraîchissement a expiré ou a été révoqué.")
 
     user = db.get(User, user_id)
     if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive or no longer exists.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Le compte utilisateur est inactif ou n’existe plus.")
 
     stored.revoked_at = utcnow()
     access_token, new_refresh_token = issue_token_pair(db, user)

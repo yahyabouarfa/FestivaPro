@@ -25,7 +25,7 @@ def refresh(payload: RefreshRequest, db: DbSession) -> TokenPair:
 @router.post("/logout", response_model=ApiMessage)
 def logout(payload: LogoutRequest, db: DbSession) -> ApiMessage:
     revoke_refresh_token(db, payload.refresh_token)
-    return ApiMessage(message="Logged out successfully.")
+    return ApiMessage(message="Déconnexion réussie.")
 
 
 @router.get("/me", response_model=UserRead)

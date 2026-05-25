@@ -19,7 +19,7 @@ def get_current_user(db: DbSession, token: Annotated[str, Depends(oauth2_scheme)
     except (KeyError, TypeError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication token is invalid or expired.",
+            detail="Le jeton d’authentification est invalide ou expiré.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -27,7 +27,7 @@ def get_current_user(db: DbSession, token: Annotated[str, Depends(oauth2_scheme)
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User account is inactive or no longer exists.",
+            detail="Le compte utilisateur est inactif ou n’existe plus.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
@@ -40,7 +40,7 @@ def require_admin(current_user: CurrentUser) -> User:
     if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required for this operation.",
+            detail="Accès administrateur requis pour cette opération.",
         )
     return current_user
 
@@ -49,6 +49,6 @@ def require_employee(current_user: CurrentUser) -> User:
     if current_user.role != "employee":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Employee access required for this operation.",
+            detail="Accès employé requis pour cette opération.",
         )
     return current_user

@@ -17,7 +17,7 @@ createRoot(document.getElementById('root')).render(
           <Route path="/login" element={<LoginPage />} />
           <Route element={<AppLayout />}>
             <Route
-              path="/admin"
+              path="/admin/:page?"
               element={
                 <ProtectedRoute role="admin">
                   <AdminDashboard />

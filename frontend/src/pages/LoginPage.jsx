@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Martini, ShieldCheck } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext.jsx';
+import { formatApiError } from '../api/errors.js';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -16,7 +17,7 @@ export default function LoginPage() {
     try {
       await login(email, password);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Unable to sign in.');
+      setError(formatApiError(err, 'Connexion impossible.'));
     } finally {
       setSubmitting(false);
     }
@@ -26,10 +27,10 @@ export default function LoginPage() {
     <main className="login-page">
       <section className="login-panel">
         <div className="login-mark">
-          <Martini size={34} />
+          <img alt="Logo FestivaPro" src="/festivaprologo.png" />
           <div>
             <h1>FestivaPro</h1>
-            <p>Festival bar operations</p>
+            <p>Gestion des bars de festival</p>
           </div>
         </div>
         <form className="form-grid" onSubmit={handleSubmit}>
@@ -38,13 +39,13 @@ export default function LoginPage() {
             <input value={email} onChange={(event) => setEmail(event.target.value)} required type="email" />
           </label>
           <label>
-            Password
+            Mot de passe
             <input value={password} onChange={(event) => setPassword(event.target.value)} required type="password" />
           </label>
           {error && <div className="error-message">{error}</div>}
           <button className="primary-button" disabled={submitting} type="submit">
             <ShieldCheck size={18} />
-            {submitting ? 'Signing in...' : 'Sign in'}
+            {submitting ? 'Connexion...' : 'Se connecter'}
           </button>
         </form>
       </section>

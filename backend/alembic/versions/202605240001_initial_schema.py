@@ -17,7 +17,7 @@ down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-PASSWORD_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEeO6c7jo1dfmjdgKiSmTsgZ7CeJc3prN9a"
+PASSWORD_HASH = "$2b$12$o0idQExrBjiCFny9aRCukO3eokVG9cshlPk3SxeG/grMc7V.dMhh."
 
 
 def upgrade() -> None:
