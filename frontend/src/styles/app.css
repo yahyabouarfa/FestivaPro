@@ -108,6 +108,49 @@ p {
   gap: 12px;
 }
 
+.login-credentials {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.login-credentials strong {
+  font-size: 14px;
+}
+
+.credential-row {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid rgba(57, 217, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.credential-row:hover {
+  border-color: rgba(57, 217, 255, 0.5);
+}
+
+.credential-row code {
+  overflow: hidden;
+  color: var(--accent);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.credential-row small {
+  color: var(--muted);
+}
+
 .compact-form {
   grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
   align-items: end;
@@ -587,6 +630,10 @@ button:disabled {
 
   .side-nav a {
     justify-content: center;
+  }
+
+  .credential-row {
+    grid-template-columns: 1fr;
   }
 
   .topbar {

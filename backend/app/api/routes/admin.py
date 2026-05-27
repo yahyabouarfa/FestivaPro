@@ -286,7 +286,29 @@ def safe_filename(value: str) -> str:
     return "".join(char if char.isalnum() else "_" for char in value).strip("_")
 
 
-def pdf_bytes(title: str, sections: list[tuple[str, list[str], list[list[object]]]]) -> bytes:
+def signature_table(labels: list[str], styles) -> Table:
+    table = Table(
+        [
+            [Paragraph(f"<b>{label}</b>", styles["Normal"]) for label in labels],
+            ["Nom: ____________________" for _ in labels],
+            ["Signature: _______________" for _ in labels],
+            ["Date: ____________________" for _ in labels],
+        ],
+        colWidths=[240 if len(labels) == 2 else 160 for _ in labels],
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ]
+        )
+    )
+    return table
+
+
+def pdf_bytes(title: str, sections: list[tuple[str, list[str], list[list[object]]]], signature_mode: str = "general") -> bytes:
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=24, leftMargin=24, topMargin=24, bottomMargin=24)
     styles = getSampleStyleSheet()
@@ -306,9 +328,10 @@ def pdf_bytes(title: str, sections: list[tuple[str, list[str], list[list[object]
             )
         )
         story.extend([table, Spacer(1, 12)])
-    story.append(Paragraph("Responsable du bar : ____________________    Responsable du stock : ____________________", styles["Normal"]))
-    story.append(Paragraph("Signature: ___________________________    Signature: ___________________________", styles["Normal"]))
-    story.append(Paragraph("Date: ________________________________    Date: ________________________________", styles["Normal"]))
+    signature_labels = ["Responsable du stock", "Directeur"]
+    if signature_mode == "bar":
+        signature_labels = ["Responsable du bar", "Responsable du stock", "Directeur"]
+    story.append(signature_table(signature_labels, styles))
     story.append(Spacer(1, 10))
     story.append(Paragraph("Ce rapport a été généré par FestivaPro et doit être vérifié et signé avant archivage.", styles["Italic"]))
     doc.build(story)
@@ -316,7 +339,6 @@ def pdf_bytes(title: str, sections: list[tuple[str, list[str], list[list[object]
 
 
 def generate_bar_pdf(db: DbSession, event: Event, night: EventNight, bar: Bar) -> PdfReport:
-    responsible = db.get(User, bar.responsible_user_id)
     assignments = (
         db.query(NightBarAssignment, User)
         .join(User, User.id == NightBarAssignment.user_id)
@@ -360,10 +382,11 @@ def generate_bar_pdf(db: DbSession, event: Event, night: EventNight, bar: Bar) -
     data = pdf_bytes(
         f"{event.name} | {bar.name} | Night {night.night_number} | {night.date} | {event.location}",
         [
-            ("Personnel", ["Nom", "Rôle", "Salaire", "Cash encaissé"], [[responsible.full_name if responsible else "-", "responsable", 0, "-"], *staff]),
+            ("Personnel", ["Nom", "Rôle", "Salaire", "Cash encaissé"], staff),
             ("Stock utilisé", ["Produit", "Ouverture", "Réassort", "Fermeture", "Utilisé", "Prix d’achat", "Coût total", "Prix de vente", "Revenu attendu"], stock),
             ("Rapprochement financier", ["Indicateur", "Valeur"], financial),
         ],
+        signature_mode="bar",
     )
     return PdfReport(
         event_id=event.id,
@@ -396,6 +419,7 @@ def generate_night_pdf(db: DbSession, event: Event, night: EventNight) -> PdfRep
     data = pdf_bytes(
         f"{event.name} | Night {night.night_number} | {night.date}",
         [("Tous les bars", ["Bar", "Cash encaissé", "Cash attendu", "Écart", "Coût stock", "Coût personnel", "Profit net"], [*table_rows, totals])],
+        signature_mode="general",
     )
     return PdfReport(event_id=event.id, event_night_id=night.id, bar_id=None, report_type="night", filename=f"{safe_filename(event.name)}_Night{night.night_number}_AllBars_Report.pdf", data=data)
 
@@ -437,6 +461,7 @@ def generate_event_pdf(db: DbSession, event: Event) -> PdfReport:
             ("Synthèse nuit par nuit", ["Nuit", "Cash total", "Cash attendu", "Écart", "Coût stock", "Coût personnel", "Profit net"], [[row["night_number"], row["cash"] or 0, row["expected_cash"] or 0, row["discrepancy"] or 0, row["stock_cost"] or 0, row["staff_cost"] or 0, row["net_profit"] or 0] for row in night_rows]),
             ("Synthèse bar par bar", ["Bar", "Cash total", "Coût stock", "Coût personnel", "Profit net", "Écart moyen"], [[row["bar_name"], row["cash"] or 0, row["stock_cost"] or 0, row["staff_cost"] or 0, row["net_profit"] or 0, row["avg_discrepancy"] or 0] for row in bar_rows]),
         ],
+        signature_mode="general",
     )
     return PdfReport(event_id=event.id, event_night_id=None, bar_id=None, report_type="event", filename=f"{safe_filename(event.name)}_FullEvent_Report.pdf", data=data)
 
@@ -615,6 +640,9 @@ def close_event(event_id: int, db: DbSession, current_user: AdminUser):
     open_nights = db.query(EventNight).filter(EventNight.event_id == event.id, EventNight.status != "closed").count()
     if open_nights:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot close event until all created nights are closed.")
+    closed_nights = db.query(EventNight).filter(EventNight.event_id == event.id, EventNight.status == "closed").count()
+    if closed_nights < event.total_nights_planned:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot close event before all planned nights are closed.")
     event.status = "closed"
     log_audit(db, current_user, "close_event", "events", event.id, {"event_id": event.id})
     report = generate_event_pdf(db, event)
@@ -636,11 +664,9 @@ def create_bar(payload: BarCreate, db: DbSession, current_user: AdminUser):
     event = get_or_404(db, Event, payload.event_id)
     if event.status == "closed":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot add bars to a closed event.")
-    require_employee(db, payload.responsible_user_id)
-    bar = Bar(**payload.model_dump())
+    bar = Bar(event_id=payload.event_id, name=payload.name)
     db.add(bar)
     db.flush()
-    ensure_bar_assignment(db, bar.id, payload.responsible_user_id)
     log_audit(db, current_user, "create_bar", "bars", bar.id, payload.model_dump())
     commit_or_409(db)
     db.refresh(bar)
@@ -654,7 +680,7 @@ def update_bar(bar_id: int, payload: BarUpdate, db: DbSession, current_user: Adm
     if payload.event_id:
         target_event = get_or_404(db, Event, payload.event_id)
         require_event_open(target_event)
-    if payload.responsible_user_id:
+    if "responsible_user_id" in payload.model_fields_set and payload.responsible_user_id:
         require_employee(db, payload.responsible_user_id)
     apply_updates(bar, payload)
     if payload.responsible_user_id:
@@ -828,7 +854,12 @@ def random_assignments(payload: RandomAssignmentRequest, db: DbSession, current_
     if event.status == "closed":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Closed events cannot be reassigned.")
     bars = db.query(Bar).filter(Bar.event_id == payload.event_id).order_by(Bar.name).all()
-    employees = db.query(User).filter(User.role == "employee", User.is_active.is_(True)).order_by(User.full_name).all()
+    employees = (
+        db.query(User)
+        .filter(User.role == "employee", User.is_active.is_(True))
+        .order_by(User.full_name)
+        .all()
+    )
     if not bars:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Create at least one bar before random assignment.")
     if not employees:
@@ -905,14 +936,14 @@ def random_bar_night_assignments(payload: RandomBarNightAssignmentRequest, db: D
     if summary:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot edit assignments after this bar is closed.")
 
-    already_assigned = select(NightBarAssignment.user_id).filter(NightBarAssignment.event_night_id == night.id)
+    assigned_user_ids = {row[0] for row in db.query(NightBarAssignment.user_id).filter(NightBarAssignment.event_night_id == night.id).all()}
     employees = (
         db.query(User)
-        .filter(User.role == "employee", User.is_active.is_(True), User.id.not_in(already_assigned))
+        .filter(User.role == "employee", User.is_active.is_(True))
         .order_by(func.rand())
-        .limit(payload.employee_count)
         .all()
     )
+    employees = [employee for employee in employees if employee.id not in assigned_user_ids][: payload.employee_count]
     if len(employees) < payload.employee_count:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Not enough available employees for that random assignment count.")
 
@@ -940,17 +971,21 @@ def random_night_assignments(db: DbSession, current_user: AdminUser, event_night
     if night.status == "closed":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Closed nights cannot be edited.")
     bars = db.query(Bar).filter(Bar.event_id == night.event_id).order_by(Bar.name).all()
+    assigned_user_ids = {row[0] for row in db.query(NightBarAssignment.user_id).filter(NightBarAssignment.event_night_id == night.id).all()}
     employees = db.query(User).filter(User.role == "employee", User.is_active.is_(True)).order_by(User.full_name).all()
+    employees = [employee for employee in employees if employee.id not in assigned_user_ids]
     if not bars or not employees:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Create bars and active employees before random assignment.")
     shuffle(employees)
     saved: list[NightBarAssignment] = []
     for index, employee in enumerate(employees):
+        if employee.id in assigned_user_ids:
+            continue
         bar = bars[index % len(bars)]
-        role = "responsible" if employee.id == bar.responsible_user_id else "bartender"
-        assignment = NightBarAssignment(event_night_id=night.id, bar_id=bar.id, user_id=employee.id, role=role, salary_amount=salary_amount)
+        assignment = NightBarAssignment(event_night_id=night.id, bar_id=bar.id, user_id=employee.id, role="bartender", salary_amount=salary_amount)
         db.add(assignment)
         saved.append(assignment)
+        assigned_user_ids.add(employee.id)
     log_audit(db, current_user, "random_night_assignments", "event_nights", night.id, {"salary_amount": salary_amount})
     commit_or_409(db)
     return saved
@@ -976,9 +1011,43 @@ def save_opening_stock(payload: OpeningStockInput, db: DbSession, current_user: 
     validate_night_can_open(db, night)
     saved: list[BarNightStock] = []
     for item in payload.items:
+        opening_qty = money(item.qty_opening)
+        top_up_qty = money(item.qty_top_up)
         event_stock = db.query(EventStock).filter(EventStock.event_id == night.event_id, EventStock.product_id == item.product_id).first()
         if not event_stock:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Create event stock for product {item.product_id} before allocating it.")
+            get_or_404(db, Product, item.product_id)
+            event_stock = EventStock(
+                event_id=night.event_id,
+                product_id=item.product_id,
+                total_qty_purchased=Decimal(0),
+                bought_price=item.bought_price or Decimal(0),
+                selling_price=item.selling_price,
+            )
+            db.add(event_stock)
+            db.flush()
+            db.add(
+                PriceHistory(
+                    event_stock_id=event_stock.id,
+                    event_id=event_stock.event_id,
+                    product_id=event_stock.product_id,
+                    old_selling_price=None,
+                    new_selling_price=event_stock.selling_price,
+                    changed_by_id=current_user.id,
+                )
+            )
+            log_audit(db, current_user, "auto_create_event_stock", "event_stock", event_stock.id, {"event_id": night.event_id, "product_id": item.product_id})
+        elif event_stock.selling_price != item.selling_price:
+            db.add(
+                PriceHistory(
+                    event_stock_id=event_stock.id,
+                    event_id=event_stock.event_id,
+                    product_id=event_stock.product_id,
+                    old_selling_price=event_stock.selling_price,
+                    new_selling_price=item.selling_price,
+                    changed_by_id=current_user.id,
+                )
+            )
+            event_stock.selling_price = item.selling_price
         existing = (
             db.query(BarNightStock)
             .filter(BarNightStock.event_night_id == night.id, BarNightStock.bar_id == bar.id, BarNightStock.product_id == item.product_id)
@@ -986,19 +1055,24 @@ def save_opening_stock(payload: OpeningStockInput, db: DbSession, current_user: 
         )
         if existing and existing.is_locked:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Locked night stock cannot be edited.")
-        if existing and night.night_number > 1 and item.qty_opening < existing.qty_opening:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Opening stock for night 2+ cannot be decreased below carried quantity.")
+        if night.night_number > 1:
+            top_up_qty += opening_qty
+            opening_qty = Decimal(0)
         already_drawn = event_stock_drawn(db, night.event_id, item.product_id, exclude_bar_id=bar.id, exclude_night_id=night.id)
-        requested_draw = item.qty_opening + item.qty_top_up if night.night_number == 1 else item.qty_top_up
-        if already_drawn + requested_draw > event_stock.total_qty_purchased:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot allocate more stock to bars than exists in the event pool.")
+        current_opening = money(existing.qty_opening) if existing else Decimal(0)
+        current_top_up = money(existing.qty_top_up) if existing else Decimal(0)
+        final_opening = current_opening + opening_qty
+        final_top_up = current_top_up + top_up_qty
+        final_draw = final_opening + final_top_up if night.night_number == 1 else final_top_up
+        if already_drawn + final_draw > event_stock.total_qty_purchased:
+            event_stock.total_qty_purchased = already_drawn + final_draw
         if not existing:
             existing = BarNightStock(event_night_id=night.id, bar_id=bar.id, product_id=item.product_id)
             db.add(existing)
-        existing.qty_opening = item.qty_opening
-        existing.qty_top_up = item.qty_top_up
+        existing.qty_opening = final_opening
+        existing.qty_top_up = final_top_up
         existing.bought_price = item.bought_price or event_stock.bought_price
-        existing.selling_price = item.selling_price or event_stock.selling_price
+        existing.selling_price = item.selling_price
         saved.append(existing)
     if night.status == "upcoming":
         night.status = "active"
@@ -1069,7 +1143,8 @@ def record_end_of_night(payload: EndOfNightInput, db: DbSession, current_user: A
     stock_rows = db.query(BarNightStock).filter(BarNightStock.event_night_id == night.id, BarNightStock.bar_id == bar.id).all()
     expected_cash = sum(money(row.qty_used) * money(row.selling_price) for row in stock_rows)
     stock_cost = sum(money(row.qty_used) * money(row.bought_price) for row in stock_rows)
-    total_cash_collected = sum(money(row.cash_collected) for row in saved_cash)
+    all_cash = db.query(BartenderCash).filter(BartenderCash.event_night_id == night.id, BartenderCash.bar_id == bar.id).all()
+    total_cash_collected = sum(money(row.cash_collected) for row in all_cash)
     staff_cost = (
         db.query(func.coalesce(func.sum(NightBarAssignment.salary_amount), 0))
         .filter(NightBarAssignment.event_night_id == night.id, NightBarAssignment.bar_id == bar.id)
@@ -1088,12 +1163,26 @@ def record_end_of_night(payload: EndOfNightInput, db: DbSession, current_user: A
     summary.gross_profit = total_cash_collected - stock_cost
     summary.net_profit = total_cash_collected - stock_cost - staff_cost
     summary.expected_profit = expected_cash - stock_cost - staff_cost
-    summary.is_closed = True
-    summary.closed_at = func.now()
-    for row in stock_rows:
-        row.is_locked = True
+    if payload.close_bar:
+        if not stock_rows:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot close a bar before opening stock exists.")
+        missing_stock = [row.product_id for row in stock_rows if row.qty_closing is None]
+        if missing_stock:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Missing remaining quantity for products: {', '.join(map(str, missing_stock))}.")
+        assigned_user_ids = {row[0] for row in db.query(NightBarAssignment.user_id).filter(NightBarAssignment.event_night_id == night.id, NightBarAssignment.bar_id == bar.id).all()}
+        cash_user_ids = {row.user_id for row in all_cash}
+        missing_cash = sorted(assigned_user_ids - cash_user_ids)
+        if missing_cash:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Missing cash entry for employees: {', '.join(map(str, missing_cash))}.")
+        summary.is_closed = True
+        summary.closed_at = func.now()
+        for row in stock_rows:
+            row.is_locked = True
+    else:
+        summary.is_closed = False
+        summary.closed_at = None
 
-    log_audit(db, current_user, "submit_bar_end_of_night", "bars", bar.id, {"event_night_id": night.id, "cash_entries": len(payload.bartender_cash), "stock_items": len(payload.stock_items)})
+    log_audit(db, current_user, "submit_bar_end_of_night", "bars", bar.id, {"event_night_id": night.id, "cash_entries": len(payload.bartender_cash), "stock_items": len(payload.stock_items), "close_bar": payload.close_bar})
     commit_or_409(db)
     db.refresh(summary)
     return EndOfNightResult(stock=updated_stock, bartender_cash=saved_cash, summary=summary)

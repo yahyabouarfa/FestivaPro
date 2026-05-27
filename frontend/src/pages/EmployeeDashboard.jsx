@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BadgeDollarSign, ClipboardList, Store, WalletCards } from 'lucide-react';
+import { BadgeDollarSign, CalendarDays, ClipboardList, Store, UserRound, WalletCards } from 'lucide-react';
 import { api } from '../api/client.js';
 import { formatApiError } from '../api/errors.js';
 
@@ -44,18 +44,31 @@ export default function EmployeeDashboard() {
               <Store size={22} />
               <span>Bar affecté</span>
               <strong>{dashboard.bar?.name}</strong>
-              <small>{dashboard.responsible_person}</small>
+              <small>{dashboard.responsible_person || 'Responsable non défini'}{dashboard.responsible_phone ? ` / ${dashboard.responsible_phone}` : ''}</small>
             </div>
             <div>
               <WalletCards size={22} />
               <span>Salaire de service</span>
               <strong>{money(dashboard.assignment.salary_amount)}</strong>
+              <small>{roleLabel(dashboard.assignment_role)}</small>
             </div>
             <div>
               <BadgeDollarSign size={22} />
               <span>Votre contribution</span>
               <strong>{money(dashboard.contribution)}</strong>
-              <small>{dashboard.units_sold} unités / {dashboard.contribution_pct}%</small>
+              <small>{dashboard.bar_closed ? `${dashboard.units_sold} unités / ${dashboard.contribution_pct}%` : 'Disponible après clôture du bar'}</small>
+            </div>
+            <div>
+              <CalendarDays size={22} />
+              <span>Nuit affectée</span>
+              <strong>{dashboard.night ? `Nuit ${dashboard.night.night_number}` : '-'}</strong>
+              <small>{dashboard.night?.date || '-'} / {statusLabel(dashboard.night?.status)}</small>
+            </div>
+            <div>
+              <UserRound size={22} />
+              <span>Affectation</span>
+              <strong>{roleLabel(dashboard.assignment_role)}</strong>
+              <small>{dashboard.event?.location || '-'} / total bar {money(dashboard.bar_total_cash)}</small>
             </div>
           </section>
 
@@ -80,4 +93,19 @@ export default function EmployeeDashboard() {
       )}
     </main>
   );
+}
+
+function roleLabel(role) {
+  return {
+    responsible: 'Responsable',
+    bartender: 'Barman',
+  }[role] || role || '-';
+}
+
+function statusLabel(status) {
+  return {
+    upcoming: 'À venir',
+    active: 'Active',
+    closed: 'Clôturée',
+  }[status] || status || '-';
 }

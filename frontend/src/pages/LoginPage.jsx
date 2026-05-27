@@ -3,6 +3,11 @@ import { ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { formatApiError } from '../api/errors.js';
 
+const demoCredentials = [
+  { role: 'Admin', email: 'admin@festivapro.local', password: 'password' },
+  { role: 'Employé', email: 'seed.yassine@festivapro.local', password: 'password' },
+];
+
 export default function LoginPage() {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
@@ -48,6 +53,24 @@ export default function LoginPage() {
             {submitting ? 'Connexion...' : 'Se connecter'}
           </button>
         </form>
+        <div className="login-credentials">
+          <strong>Comptes de démonstration</strong>
+          {demoCredentials.map((item) => (
+            <button
+              className="credential-row"
+              key={item.email}
+              onClick={() => {
+                setEmail(item.email);
+                setPassword(item.password);
+              }}
+              type="button"
+            >
+              <span>{item.role}</span>
+              <code>{item.email}</code>
+              <small>{item.password}</small>
+            </button>
+          ))}
+        </div>
       </section>
     </main>
   );

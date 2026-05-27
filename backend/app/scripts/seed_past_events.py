@@ -221,11 +221,7 @@ def seed_event(db, admin: User, employees: list[User], products: list[Product], 
 
     bars = []
     for index, bar_name in enumerate(config["bars"]):
-        bar = Bar(
-            event_id=event.id,
-            name=bar_name,
-            responsible_user_id=employees[index % len(employees)].id,
-        )
+        bar = Bar(event_id=event.id, name=bar_name)
         db.add(bar)
         db.flush()
         bars.append(bar)

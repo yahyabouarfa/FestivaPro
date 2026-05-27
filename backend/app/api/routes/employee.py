@@ -5,7 +5,7 @@ from sqlalchemy import func
 
 from app.api.deps import CurrentUser, DbSession, require_employee
 from app.models import Bar, BarNightStock, BarNightSummary, BartenderCash, Event, EventNight, NightBarAssignment, Product, ProductCategory, User
-from app.schemas.operations import BarRead, EmployeeDashboard, EventRead, NightBarAssignmentRead
+from app.schemas.operations import BarRead, EmployeeDashboard, EventNightRead, EventRead, NightBarAssignmentRead
 
 router = APIRouter(prefix="/employee", tags=["employee"], dependencies=[Depends(require_employee)])
 
@@ -27,12 +27,24 @@ def latest_assignment(db: DbSession, user_id: int, event_id: int | None = None) 
 def dashboard(db: DbSession, current_user: CurrentUser):
     assignment = latest_assignment(db, current_user.id)
     if not assignment:
-        return EmployeeDashboard(assignment=None, bar=None, event=None, prices=[], contribution=Decimal(0))
+        return EmployeeDashboard(assignment=None, bar=None, event=None, night=None, prices=[], contribution=Decimal(0))
 
     bar = db.get(Bar, assignment.bar_id)
     night = db.get(EventNight, assignment.event_night_id)
     event = db.get(Event, night.event_id) if night else None
-    responsible = db.get(User, bar.responsible_user_id) if bar else None
+    responsible_row = (
+        db.query(NightBarAssignment, User)
+        .join(User, User.id == NightBarAssignment.user_id)
+        .filter(
+            NightBarAssignment.event_night_id == assignment.event_night_id,
+            NightBarAssignment.bar_id == assignment.bar_id,
+            NightBarAssignment.role == "responsible",
+        )
+        .first()
+        if bar
+        else None
+    )
+    responsible = responsible_row[1] if responsible_row else None
     previous_assignment = (
         db.query(NightBarAssignment)
         .join(EventNight, EventNight.id == NightBarAssignment.event_night_id)
@@ -71,7 +83,10 @@ def dashboard(db: DbSession, current_user: CurrentUser):
         assignment=NightBarAssignmentRead.model_validate(assignment),
         bar=BarRead.model_validate(bar) if bar else None,
         event=EventRead.model_validate(event) if event else None,
+        night=EventNightRead.model_validate(night) if night else None,
         responsible_person=responsible.full_name if responsible else None,
+        responsible_phone=responsible.phone_number if responsible else None,
+        assignment_role=assignment.role,
         prices=[
             {
                 "product_id": event_stock.product_id,
@@ -85,6 +100,8 @@ def dashboard(db: DbSession, current_user: CurrentUser):
         contribution=contribution,
         units_sold=units_sold,
         contribution_pct=contribution_pct,
+        bar_total_cash=bar_summary.total_cash_collected if bar_summary else Decimal(0),
+        bar_closed=bool(bar_summary and bar_summary.is_closed),
         reassignment_notice=reassignment_notice,
     )
 

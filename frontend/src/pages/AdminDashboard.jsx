@@ -7,15 +7,17 @@ import ResourcePanel from '../components/ResourcePanel.jsx';
 
 const blankUser = { full_name: '', email: '', phone_number: '', role: 'employee', password: '', is_active: true };
 const blankEvent = { name: '', location: '', start_date: '', total_nights_planned: '1', attendance_count: '0' };
-const blankBar = { name: '', responsible_user_id: '' };
+const blankBar = { name: '' };
 const blankBeginNight = { date: '' };
 const blankCategory = { name: '' };
 const blankProduct = { name: '', category_id: '', unit: 'unit' };
 const blankEventStock = { event_id: '', product_id: '', total_qty_purchased: '0', bought_price: '0', selling_price: '0' };
 const blankNightStaff = { bar_id: '', responsible_user_id: '', salary_amount: '0' };
 const blankRandomStaff = { bar_id: '', employee_count: '1', salary_amount: '0' };
-const blankOpeningStock = { bar_id: '', product_id: '', qty_opening: '0', qty_top_up: '0', bought_price: '0', selling_price: '0' };
-const blankClosing = { bar_id: '', product_id: '', qty_closing: '0', user_id: '', cash_collected: '0' };
+const blankOpeningStock = { bar_id: '', product_id: '', qty_opening: '0', selling_price: '0' };
+const blankClosingStock = { bar_id: '', product_id: '', qty_closing: '0' };
+const blankClosingCash = { bar_id: '', user_id: '', cash_collected: '0' };
+const blankCloseBar = { bar_id: '' };
 
 const pageTitles = {
   events: ['Tableau des événements', 'Ouvrez un événement, puis descendez dans ses nuits et ses bars.'],
@@ -63,7 +65,9 @@ export default function AdminDashboard() {
     nightStaff: blankNightStaff,
     randomStaff: blankRandomStaff,
     openingStock: blankOpeningStock,
-    closing: blankClosing,
+    closingStock: blankClosingStock,
+    closingCash: blankClosingCash,
+    closeBar: blankCloseBar,
   });
 
   const employees = useMemo(() => users.filter((user) => user.role === 'employee' && user.is_active), [users]);
@@ -73,7 +77,29 @@ export default function AdminDashboard() {
   const eventTimeline = useMemo(() => eventNights.filter((night) => Number(night.event_id) === Number(selectedEventId)).sort((a, b) => a.night_number - b.night_number), [eventNights, selectedEventId]);
   const eventReports = useMemo(() => pdfReports.filter((report) => Number(report.event_id) === Number(selectedEventId)), [pdfReports, selectedEventId]);
   const nightReports = useMemo(() => pdfReports.filter((report) => Number(report.event_night_id) === Number(selectedNightId)), [pdfReports, selectedNightId]);
-  const canBeginNight = selectedEvent && selectedEvent.status !== 'closed' && !eventTimeline.some((night) => night.status === 'active') && eventTimeline.length < Number(selectedEvent.total_nights_planned || selectedEvent.total_nights);
+  const closingCashEmployees = useMemo(() => {
+    if (!selectedNight || !forms.closingCash.bar_id) return [];
+    const assignedIds = new Set(
+      nightAssignments
+        .filter((assignment) => Number(assignment.event_night_id) === Number(selectedNight.id) && Number(assignment.bar_id) === Number(forms.closingCash.bar_id))
+        .map((assignment) => Number(assignment.user_id)),
+    );
+    return employees.filter((employee) => assignedIds.has(Number(employee.id)));
+  }, [employees, forms.closingCash.bar_id, nightAssignments, selectedNight]);
+  const closingStockProducts = useMemo(() => {
+    if (!selectedNight || !forms.closingStock.bar_id) return [];
+    const allocatedProductIds = new Set(
+      stock
+        .filter((item) => Number(item.event_night_id) === Number(selectedNight.id) && Number(item.bar_id) === Number(forms.closingStock.bar_id))
+        .map((item) => Number(item.product_id)),
+    );
+    return products.filter((product) => allocatedProductIds.has(Number(product.id)));
+  }, [forms.closingStock.bar_id, products, selectedNight, stock]);
+  const previousNightClosed = eventTimeline.length === 0 || eventTimeline[eventTimeline.length - 1]?.status === 'closed';
+  const plannedNights = Number(selectedEvent?.total_nights_planned || selectedEvent?.total_nights || 0);
+  const allBarsClosedForNight = selectedNight && eventBars.length > 0 && eventBars.every((bar) => barSummaries.some((summary) => Number(summary.event_night_id) === Number(selectedNight.id) && Number(summary.bar_id) === Number(bar.id) && summary.is_closed));
+  const canBeginNight = selectedEvent && selectedEvent.status !== 'closed' && !eventTimeline.some((night) => night.status === 'active') && previousNightClosed && eventTimeline.length < plannedNights;
+  const canCloseEvent = selectedEvent && selectedEvent.status !== 'closed' && eventTimeline.length >= plannedNights && eventTimeline.every((night) => night.status === 'closed');
   const eventLocked = selectedEvent?.status === 'closed';
   const nightLocked = eventLocked || selectedNight?.status === 'closed';
 
@@ -116,6 +142,28 @@ export default function AdminDashboard() {
 
   function setForm(name, field, value) {
     setForms((current) => ({ ...current, [name]: { ...current[name], [field]: value } }));
+  }
+
+  function setClosingCashBar(value) {
+    setForms((current) => ({
+      ...current,
+      closingCash: {
+        ...current.closingCash,
+        bar_id: value,
+        user_id: '',
+      },
+    }));
+  }
+
+  function setClosingStockBar(value) {
+    setForms((current) => ({
+      ...current,
+      closingStock: {
+        ...current.closingStock,
+        bar_id: value,
+        product_id: '',
+      },
+    }));
   }
 
   async function submit(name, endpoint, payload, resetValue, onSuccess) {
@@ -161,24 +209,49 @@ export default function AdminDashboard() {
       items: [{
         product_id: forms.openingStock.product_id,
         qty_opening: forms.openingStock.qty_opening,
-        qty_top_up: forms.openingStock.qty_top_up,
-        bought_price: forms.openingStock.bought_price,
         selling_price: forms.openingStock.selling_price,
       }],
     }, blankOpeningStock);
   }
 
+  async function saveClosingStock(event) {
+    event.preventDefault();
+    await submit('closingStock', '/admin/end-of-night', {
+      event_night_id: selectedNightId,
+      bar_id: forms.closingStock.bar_id,
+      stock_items: [{ product_id: forms.closingStock.product_id, qty_closing: forms.closingStock.qty_closing }],
+      bartender_cash: [],
+      close_bar: false,
+    }, blankClosingStock);
+  }
+
+  async function saveClosingCash(event) {
+    event.preventDefault();
+    await submit('closingCash', '/admin/end-of-night', {
+      event_night_id: selectedNightId,
+      bar_id: forms.closingCash.bar_id,
+      stock_items: [],
+      bartender_cash: [{ user_id: forms.closingCash.user_id, cash_collected: forms.closingCash.cash_collected }],
+      close_bar: false,
+    }, blankClosingCash);
+  }
+
   async function closeBar(event) {
     event.preventDefault();
-    await submit('closing', '/admin/end-of-night', {
+    await submit('closeBar', '/admin/end-of-night', {
       event_night_id: selectedNightId,
-      bar_id: forms.closing.bar_id,
-      stock_items: [{ product_id: forms.closing.product_id, qty_closing: forms.closing.qty_closing }],
-      bartender_cash: forms.closing.user_id ? [{ user_id: forms.closing.user_id, cash_collected: forms.closing.cash_collected }] : [],
-    }, blankClosing);
+      bar_id: forms.closeBar.bar_id,
+      stock_items: [],
+      bartender_cash: [],
+      close_bar: true,
+    }, blankCloseBar);
   }
 
   async function closeNight() {
+    if (!allBarsClosedForNight) {
+      setMessage('Clôturez chaque bar avant de clôturer la nuit.');
+      return;
+    }
     try {
       await api.post(`/admin/event-nights/${selectedNightId}/close`);
       await loadAll();
@@ -189,6 +262,10 @@ export default function AdminDashboard() {
   }
 
   async function closeEvent() {
+    if (!canCloseEvent) {
+      setMessage('Toutes les nuits prévues doivent être clôturées avant l’événement.');
+      return;
+    }
     try {
       await api.post(`/admin/events/${selectedEventId}/close`);
       await loadAll();
@@ -237,13 +314,10 @@ export default function AdminDashboard() {
                 <FormField label="Nom du bar" help="Physical bar or zone inside this event.">
                   <input placeholder="Exemple : Bar VIP" value={forms.bar.name} onChange={(e) => setForm('bar', 'name', e.target.value)} required />
                 </FormField>
-                <FormField label="Responsable par défaut" help="Default contact for this bar. You can change the responsible person per night below.">
-                  <Select value={forms.bar.responsible_user_id} onChange={(value) => setForm('bar', 'responsible_user_id', value)} options={employees} label="Sélectionner un employé" />
-                </FormField>
                 <button className="primary-button" type="submit"><Plus size={16} />Ajouter le bar</button>
               </form>}
               <div className="card-grid">
-                {eventBars.map((bar) => <div className="drill-card" key={bar.id}><strong>{bar.name}</strong><span>Responsable par défaut : {userLabel(users, bar.responsible_user_id)}</span><span>{nightAssignments.filter((item) => item.bar_id === bar.id).length} affectations de nuit</span></div>)}
+                {eventBars.map((bar) => <EventBarCard key={bar.id} bar={bar} users={users} nights={eventTimeline} assignments={nightAssignments} summaries={barSummaries} />)}
               </div>
               <h3>Nuits</h3>
               {canBeginNight && (
@@ -306,14 +380,8 @@ export default function AdminDashboard() {
                 <FormField label="Produit" help="Product placed into the bar stock.">
                   <Select value={forms.openingStock.product_id} onChange={(value) => setForm('openingStock', 'product_id', value)} options={products} label="Sélectionner un produit" />
                 </FormField>
-                <FormField label="Quantité d’ouverture" help="Units placed in the bar before opening.">
+                <FormField label="Quantité" help="Units placed in the bar before opening.">
                   <input placeholder="Unités" value={forms.openingStock.qty_opening} onChange={(e) => setForm('openingStock', 'qty_opening', e.target.value)} type="number" />
-                </FormField>
-                <FormField label="Quantité de réassort" help="Extra units added for this night after carryover.">
-                  <input placeholder="Unités" value={forms.openingStock.qty_top_up} onChange={(e) => setForm('openingStock', 'qty_top_up', e.target.value)} type="number" />
-                </FormField>
-                <FormField label="Prix d’achat" help="Cost paid per unit. Used for stock cost and profit.">
-                  <input placeholder="MAD" value={forms.openingStock.bought_price} onChange={(e) => setForm('openingStock', 'bought_price', e.target.value)} type="number" />
                 </FormField>
                 <FormField label="Prix de vente" help="Customer price per unit. Used for expected cash.">
                   <input placeholder="MAD" value={forms.openingStock.selling_price} onChange={(e) => setForm('openingStock', 'selling_price', e.target.value)} type="number" />
@@ -321,21 +389,33 @@ export default function AdminDashboard() {
                 <button className="primary-button" type="submit"><Plus size={16} />Enregistrer le stock</button>
               </form>
               <h3>Fin de nuit par bar</h3>
-              <form className="compact-form" onSubmit={closeBar}>
-                <FormField label="Bar" help="Bar you are closing for this night.">
-                  <Select value={forms.closing.bar_id} onChange={(value) => setForm('closing', 'bar_id', value)} options={eventBars} label="Sélectionner un bar" />
+              <form className="compact-form" onSubmit={saveClosingStock}>
+                <FormField label="Bar" help="Bar receiving the remaining stock count.">
+                  <Select value={forms.closingStock.bar_id} onChange={setClosingStockBar} options={eventBars} label="Sélectionner un bar" />
                 </FormField>
                 <FormField label="Produit" help="Product being physically counted after the night.">
-                  <Select value={forms.closing.product_id} onChange={(value) => setForm('closing', 'product_id', value)} options={products} label="Sélectionner un produit" />
+                  <Select value={forms.closingStock.product_id} onChange={(value) => setForm('closingStock', 'product_id', value)} options={closingStockProducts} label={forms.closingStock.bar_id ? 'Sélectionner un produit ouvert' : 'Sélectionner un bar d’abord'} />
                 </FormField>
-                <FormField label="Quantité de fermeture" help="Units left in the bar after service ends.">
-                  <input placeholder="Unités restantes" value={forms.closing.qty_closing} onChange={(e) => setForm('closing', 'qty_closing', e.target.value)} type="number" />
+                <FormField label="Quantité restante" help="Units left in the bar after service ends.">
+                  <input placeholder="Unités restantes" value={forms.closingStock.qty_closing} onChange={(e) => setForm('closingStock', 'qty_closing', e.target.value)} type="number" />
+                </FormField>
+                <button className="secondary-button" type="submit"><ReceiptText size={16} />Enregistrer stock</button>
+              </form>
+              <form className="compact-form" onSubmit={saveClosingCash}>
+                <FormField label="Bar" help="Bar receiving the employee cash entry.">
+                  <Select value={forms.closingCash.bar_id} onChange={setClosingCashBar} options={eventBars} label="Sélectionner un bar" />
                 </FormField>
                 <FormField label="Employé" help="Employee handing in cash. Phone is shown for confirmation.">
-                  <Select value={forms.closing.user_id} onChange={(value) => setForm('closing', 'user_id', value)} options={employees} label="Sélectionner un employé" />
+                  <Select value={forms.closingCash.user_id} onChange={(value) => setForm('closingCash', 'user_id', value)} options={closingCashEmployees} label={forms.closingCash.bar_id ? 'Sélectionner un employé affecté' : 'Sélectionner un bar d’abord'} />
                 </FormField>
                 <FormField label="Cash encaissé" help="Actual MAD cash this bartender handed in.">
-                  <input placeholder="MAD" value={forms.closing.cash_collected} onChange={(e) => setForm('closing', 'cash_collected', e.target.value)} type="number" />
+                  <input placeholder="MAD" value={forms.closingCash.cash_collected} onChange={(e) => setForm('closingCash', 'cash_collected', e.target.value)} type="number" />
+                </FormField>
+                <button className="secondary-button" type="submit"><ReceiptText size={16} />Enregistrer cash</button>
+              </form>
+              <form className="compact-form" onSubmit={closeBar}>
+                <FormField label="Bar" help="Locks this bar after all remaining stock and employee cash entries are saved.">
+                  <Select value={forms.closeBar.bar_id} onChange={(value) => setForm('closeBar', 'bar_id', value)} options={eventBars} label="Sélectionner un bar" />
                 </FormField>
                 <button className="primary-button" type="submit"><ReceiptText size={16} />Clôturer le bar</button>
               </form>
@@ -347,7 +427,7 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {activePage !== 'events' && <UtilityPages activePage={activePage} users={users} employees={employees} events={events} categories={categories} products={products} eventStock={eventStock} auditLogs={auditLogs} forms={forms} setForm={setForm} submit={submit} />}
+      {activePage !== 'events' && <UtilityPages activePage={activePage} users={users} employees={employees} events={events} categories={categories} products={products} eventStock={eventStock} pdfReports={pdfReports} auditLogs={auditLogs} forms={forms} setForm={setForm} submit={submit} onDownload={downloadReport} />}
     </main>
   );
 }
@@ -392,6 +472,24 @@ function EventsRoot({ events, nights, summaries, snapshots, forms, setForm, subm
   );
 }
 
+function EventBarCard({ bar, users, nights, assignments, summaries }) {
+  const activeNight = nights.find((night) => night.status === 'active');
+  const currentNight = activeNight || [...nights].reverse().find(Boolean);
+  const nightAssignments = currentNight ? assignments.filter((item) => Number(item.event_night_id) === Number(currentNight.id) && Number(item.bar_id) === Number(bar.id)) : [];
+  const currentSummary = currentNight ? summaries.find((item) => Number(item.event_night_id) === Number(currentNight.id) && Number(item.bar_id) === Number(bar.id)) : null;
+  const responsible = nightAssignments.find((item) => item.role === 'responsible');
+  const bartenderCount = nightAssignments.filter((item) => item.role === 'bartender').length;
+  const status = currentSummary?.is_closed ? 'BAR CLÔTURÉ' : nightAssignments.length ? 'EN COURS' : 'EN ATTENTE';
+  return (
+    <div className="drill-card">
+      <strong>{bar.name}</strong>
+      <span>Responsable de nuit : {responsible ? userLabel(users, responsible.user_id) : '-'}</span>
+      <span>{bartenderCount} employés affectés</span>
+      <span>{currentNight ? `Nuit ${currentNight.night_number} : ${status}` : 'Aucune nuit commencée'}</span>
+    </div>
+  );
+}
+
 function NightBarPanel({ bar, users, products, stock, assignments, summaries, cash, nightId }) {
   const barAssignments = assignments.filter((item) => item.event_night_id === nightId && item.bar_id === bar.id);
   const barStock = stock.filter((item) => item.event_night_id === nightId && item.bar_id === bar.id);
@@ -401,18 +499,17 @@ function NightBarPanel({ bar, users, products, stock, assignments, summaries, ca
     <div className="drill-card">
       <strong>{bar.name}</strong>
       <span>{ready ? 'PRÊT' : 'CONFIGURATION EN ATTENTE'}</span>
-      <span>Responsable par défaut : {userLabel(users, bar.responsible_user_id)}</span>
       <span>Responsable ce soir : {barAssignments.filter((item) => item.role === 'responsible').map((item) => userLabel(users, item.user_id)).join(', ') || '-'}</span>
       <span>Employés : {barAssignments.filter((item) => item.role === 'bartender').map((item) => userLabel(users, item.user_id)).join(', ') || '-'}</span>
-      <span>Objectif : {money(sum(barStock, 'expected_revenue'))}</span>
+      <span>Objectif : {money(barStock.reduce((total, row) => total + ((Number(row.qty_opening || 0) + Number(row.qty_top_up || 0)) * Number(row.selling_price || 0)), 0))}</span>
       {summary && <span className={Number(summary.cash_discrepancy) === 0 ? 'positive' : Number(summary.cash_discrepancy) > 0 ? 'negative' : 'warning'}>{Number(summary.cash_discrepancy) === 0 ? 'Équilibré' : Number(summary.cash_discrepancy) > 0 ? `Manquant ${money(summary.cash_discrepancy)}` : `Surplus ${money(Math.abs(Number(summary.cash_discrepancy)))}`}</span>}
-      <DataTable columns={['Produit', 'Ouverture', 'Réassort', 'Fermeture', 'Utilisé', 'Vente']} rows={barStock.map((row) => [productName(products, row.product_id), row.qty_opening, row.qty_top_up, row.qty_closing ?? '-', row.qty_used, money(row.selling_price)])} />
+      <DataTable columns={['Produit', 'Quantité départ', 'Restant', 'Utilisé', 'Vente']} rows={barStock.map((row) => [productName(products, row.product_id), Number(row.qty_opening || 0) + Number(row.qty_top_up || 0), row.qty_closing ?? '-', row.qty_used, money(row.selling_price)])} />
       <DataTable columns={['Employé', 'Cash']} rows={cash.filter((row) => row.event_night_id === nightId && row.bar_id === bar.id).map((row) => [userName(users, row.user_id), money(row.cash_collected)])} />
     </div>
   );
 }
 
-function UtilityPages({ activePage, users, employees, events, categories, products, eventStock, auditLogs, forms, setForm, submit }) {
+function UtilityPages({ activePage, users, employees, events, categories, products, eventStock, pdfReports, auditLogs, forms, setForm, submit, onDownload }) {
   if (activePage === 'users') {
     return (
       <ResourcePanel title="Utilisateurs" icon={<UsersRound size={18} />}>
@@ -468,7 +565,19 @@ function UtilityPages({ activePage, users, employees, events, categories, produc
     );
   }
   if (activePage === 'audit') return <ResourcePanel title="Journal d’audit" icon={<ReceiptText size={18} />}><DataTable columns={['Date', 'Action', 'Entité']} rows={auditLogs.map((log) => [new Date(log.created_at).toLocaleString(), auditActionLabel(log.action), `${entityLabel(log.entity_type)} #${log.entity_id || '-'}`])} /></ResourcePanel>;
-  if (activePage === 'reports') return <ResourcePanel title="Rapports" icon={<Download size={18} />}><p className="muted">Ouvrez une fiche événement pour télécharger les PDF événement, nuit et bar.</p></ResourcePanel>;
+  if (activePage === 'reports') {
+    return (
+      <ResourcePanel title="Rapports" icon={<Download size={18} />}>
+        <DataTable columns={['Événement', 'Type', 'Fichier', 'Généré', '']} rows={pdfReports.map((report) => [
+          eventName(events, report.event_id),
+          reportTypeLabel(report.report_type),
+          report.filename,
+          new Date(report.generated_at).toLocaleString(),
+          <button className="secondary-button" type="button" onClick={() => onDownload(report.id)}><Download size={16} />PDF</button>,
+        ])} />
+      </ResourcePanel>
+    );
+  }
   return null;
 }
 

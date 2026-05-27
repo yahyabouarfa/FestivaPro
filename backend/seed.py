@@ -107,7 +107,7 @@ def main() -> None:
             bars = []
             for offset in range(bar_count):
                 employee = employees[(event_index + offset) % len(employees)]
-                bar = get_or_create(db, Bar, event_id=event.id, name=["Main Bar", "VIP Bar", "Garden Bar", "Terrace Bar"][offset % 4], defaults={"responsible_user_id": employee.id})
+                bar = get_or_create(db, Bar, event_id=event.id, name=["Main Bar", "VIP Bar", "Garden Bar", "Terrace Bar"][offset % 4], defaults={})
                 bars.append(bar)
                 for assignment_offset in range(3):
                     bartender = employees[(event_index * 3 + offset + assignment_offset) % len(employees)]

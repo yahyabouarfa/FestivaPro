@@ -99,11 +99,11 @@ class Bar(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    responsible_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
+    responsible_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     event: Mapped[Event] = relationship(back_populates="bars")
-    responsible_user: Mapped[User] = relationship(back_populates="responsible_bars", foreign_keys=[responsible_user_id])
+    responsible_user: Mapped[User | None] = relationship(back_populates="responsible_bars", foreign_keys=[responsible_user_id])
     stock_items: Mapped[list["BarStock"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
     night_stock_items: Mapped[list["BarNightStock"]] = relationship(back_populates="bar", cascade="all, delete-orphan")
     assignments: Mapped[list["BarAssignment"]] = relationship(back_populates="bar", cascade="all, delete-orphan")

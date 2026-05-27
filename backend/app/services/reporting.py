@@ -34,10 +34,9 @@ def fetch_bar(db: Session, bar_id: int):
     return db.execute(
         text(
             """
-            SELECT b.*, e.name AS event_name, e.event_date, u.full_name AS responsible_name
+            SELECT b.*, e.name AS event_name, e.event_date
             FROM bars b
             JOIN events e ON e.id = b.event_id
-            JOIN users u ON u.id = b.responsible_user_id
             WHERE b.id = :bar_id
             """
         ),
@@ -86,7 +85,7 @@ def bars_summary(db: Session, event_id: int):
     return db.execute(
         text(
             """
-            SELECT b.id AS bar_id, b.name AS bar_name, u.full_name AS responsible_name,
+            SELECT b.id AS bar_id, b.name AS bar_name,
                    COALESCE(SUM(f.quantity_allocated), 0) AS allocated,
                    COALESCE(SUM(f.quantity_sold), 0) AS sold,
                    COALESCE(SUM(f.quantity_remaining), 0) AS remaining,
@@ -97,7 +96,6 @@ def bars_summary(db: Session, event_id: int):
                    CASE WHEN COALESCE(SUM(f.quantity_allocated), 0) = 0 THEN 0
                         ELSE COALESCE(SUM(f.quantity_remaining), 0) / SUM(f.quantity_allocated) * 100 END AS waste_pct
             FROM bars b
-            JOIN users u ON u.id = b.responsible_user_id
             LEFT JOIN bar_stock_financials f ON f.bar_id = b.id
             LEFT JOIN (
               SELECT bar_id, SUM(salary_amount) AS staff_cost
@@ -105,7 +103,7 @@ def bars_summary(db: Session, event_id: int):
               GROUP BY bar_id
             ) payroll ON payroll.bar_id = b.id
             WHERE b.event_id = :event_id
-            GROUP BY b.id, b.name, u.full_name, payroll.staff_cost
+            GROUP BY b.id, b.name, payroll.staff_cost
             ORDER BY net_profit DESC, revenue DESC, waste_pct ASC
             """
         ),
@@ -154,7 +152,21 @@ def financial_totals(rows):
     return {"revenue": revenue, "cost": cost, "staff_cost": staff, "net_profit": revenue - cost - staff}
 
 
-def build_pdf(title: str, sections: list[tuple[str, list[str], list[list[object]]]]) -> bytes:
+def report_signature_table(labels: list[str], styles) -> Table:
+    table = Table(
+        [
+            [Paragraph(f"<b>{label}</b>", styles["Normal"]) for label in labels],
+            ["Nom: ____________________" for _ in labels],
+            ["Signature: _______________" for _ in labels],
+            ["Date: ____________________" for _ in labels],
+        ],
+        colWidths=[240 if len(labels) == 2 else 160 for _ in labels],
+    )
+    table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("FONTSIZE", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 8)]))
+    return table
+
+
+def build_pdf(title: str, sections: list[tuple[str, list[str], list[list[object]]]], signature_mode: str = "general") -> bytes:
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=24, leftMargin=24, topMargin=24, bottomMargin=24)
     styles = getSampleStyleSheet()
@@ -178,6 +190,10 @@ def build_pdf(title: str, sections: list[tuple[str, list[str], list[list[object]
             )
         )
         story.extend([table, Spacer(1, 12)])
+    labels = ["Responsable du stock", "Directeur"]
+    if signature_mode == "bar":
+        labels = ["Responsable du bar", "Responsable du stock", "Directeur"]
+    story.append(report_signature_table(labels, styles))
     doc.build(story)
     return buffer.getvalue()
 
@@ -210,7 +226,7 @@ def per_bar_report(db: Session, bar_id: int, file_type: str) -> ReportFile:
     if file_type == "xlsx":
         wb = Workbook()
         wb.remove(wb.active)
-        add_sheet(wb, "Overview", ["Field", "Value"], [["Bar", bar["name"]], ["Event", bar["event_name"]], ["Date", str(bar["event_date"])], ["Responsible", bar["responsible_name"]], *totals])
+        add_sheet(wb, "Overview", ["Field", "Value"], [["Bar", bar["name"]], ["Event", bar["event_name"]], ["Date", str(bar["event_date"])], *totals])
         add_sheet(wb, "Products", ["Product", "Category", "Allocated", "Sold", "Remaining", "Revenue", "Cost", "Profit"], [[p["product_name"], p["category_name"], p["quantity_allocated"], p["quantity_sold"], p["quantity_remaining"], p["revenue"], p["cost"], p["profit"]] for p in products])
         add_sheet(wb, "Bartenders", ["Bartender", "Units sold", "Contribution %", "Salary paid"], [[b["full_name"], b["units_sold"], b["contribution_pct"], b["salary_paid"]] for b in bartenders])
         return ReportFile(f"{base}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook_bytes(wb))
@@ -218,10 +234,11 @@ def per_bar_report(db: Session, bar_id: int, file_type: str) -> ReportFile:
     pdf = build_pdf(
         f"{bar['name']} | {bar['event_name']} | {bar['event_date']}",
         [
-            ("Bar Overview", ["Field", "Value"], [["Responsible", bar["responsible_name"]], *totals]),
+            ("Bar Overview", ["Field", "Value"], totals),
             ("Product Breakdown", ["Product", "Category", "Allocated", "Sold", "Remaining", "Revenue", "Cost", "Profit"], [[p["product_name"], p["category_name"], p["quantity_allocated"], p["quantity_sold"], p["quantity_remaining"], p["revenue"], p["cost"], p["profit"]] for p in products]),
             ("Bartenders", ["Bartender", "Units", "Contribution %", "Salary"], [[b["full_name"], b["units_sold"], b["contribution_pct"], b["salary_paid"]] for b in bartenders]),
         ],
+        signature_mode="bar",
     )
     return ReportFile(f"{base}.pdf", "application/pdf", pdf)
 
@@ -230,18 +247,18 @@ def all_bars_report(db: Session, event_id: int, file_type: str) -> ReportFile:
     event = fetch_event(db, event_id)
     rows = bars_summary(db, event_id)
     totals = financial_totals(rows)
-    data = [[r["bar_name"], r["responsible_name"], r["sold"], r["remaining"], r["revenue"], r["cost"], r["staff_cost"], r["net_profit"], r["waste_pct"]] for r in rows]
+    data = [[r["bar_name"], r["sold"], r["remaining"], r["revenue"], r["cost"], r["staff_cost"], r["net_profit"], r["waste_pct"]] for r in rows]
     base = f"event-{event_id}-all-bars-report"
     if file_type == "xlsx":
         wb = Workbook()
         wb.remove(wb.active)
-        add_sheet(wb, "All Bars", ["Bar", "Responsible", "Sold", "Remaining", "Revenue", "Cost", "Staff", "Net Profit", "Waste %"], data)
+        add_sheet(wb, "All Bars", ["Bar", "Sold", "Remaining", "Revenue", "Cost", "Staff", "Net Profit", "Waste %"], data)
         add_sheet(wb, "Totals", ["Metric", "Value"], [["Revenue", totals["revenue"]], ["COGS", totals["cost"]], ["Staff cost", totals["staff_cost"]], ["Net profit", totals["net_profit"]]])
         return ReportFile(f"{base}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook_bytes(wb))
     return ReportFile(
         f"{base}.pdf",
         "application/pdf",
-        build_pdf(f"All Bars | {event['name']} | {event['event_date']}", [("Ranked Bar Summary", ["Bar", "Responsible", "Sold", "Remaining", "Revenue", "Cost", "Staff", "Net Profit", "Waste %"], data), ("Totals", ["Metric", "Value"], [["Revenue", totals["revenue"]], ["COGS", totals["cost"]], ["Staff cost", totals["staff_cost"]], ["Net profit", totals["net_profit"]]])]),
+        build_pdf(f"All Bars | {event['name']} | {event['event_date']}", [("Ranked Bar Summary", ["Bar", "Sold", "Remaining", "Revenue", "Cost", "Staff", "Net Profit", "Waste %"], data), ("Totals", ["Metric", "Value"], [["Revenue", totals["revenue"]], ["COGS", totals["cost"]], ["Staff cost", totals["staff_cost"]], ["Net profit", totals["net_profit"]]])]),
     )
 
 

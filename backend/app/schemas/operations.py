@@ -61,7 +61,6 @@ class EventNightRead(ORMModel):
 class BarCreate(BaseModel):
     event_id: int
     name: str = Field(min_length=2, max_length=120)
-    responsible_user_id: int
 
 
 class BarUpdate(BaseModel):
@@ -74,7 +73,7 @@ class BarRead(ORMModel):
     id: int
     event_id: int
     name: str
-    responsible_user_id: int
+    responsible_user_id: int | None
     created_at: datetime
 
 
@@ -186,10 +185,10 @@ class NightBarAssignmentRead(ORMModel):
 
 class OpeningStockItem(BaseModel):
     product_id: int
-    qty_opening: Decimal = Field(default=0, ge=0)
+    qty_opening: Decimal = Field(ge=0)
     qty_top_up: Decimal = Field(default=0, ge=0)
-    bought_price: Decimal = Field(default=0, ge=0)
-    selling_price: Decimal = Field(default=0, ge=0)
+    bought_price: Decimal | None = Field(default=None, ge=0)
+    selling_price: Decimal = Field(ge=0)
 
 
 class OpeningStockInput(BaseModel):
@@ -236,9 +235,10 @@ class BartenderSaleInput(BaseModel):
 class EndOfNightInput(BaseModel):
     event_night_id: int
     bar_id: int
-    stock_items: list[EndOfNightStockItem]
+    stock_items: list[EndOfNightStockItem] = Field(default_factory=list)
     bartender_cash: list[BartenderCashInput] = Field(default_factory=list)
     bartender_sales: list[BartenderSaleInput] = Field(default_factory=list)
+    close_bar: bool = False
 
 
 class BartenderCashRead(ORMModel):
@@ -413,9 +413,14 @@ class EmployeeDashboard(BaseModel):
     assignment: NightBarAssignmentRead | AssignmentRead | None
     bar: BarRead | None
     event: EventRead | None
+    night: EventNightRead | None = None
     responsible_person: str | None = None
+    responsible_phone: str | None = None
+    assignment_role: str | None = None
     prices: list[EmployeePrice]
     contribution: Decimal
     units_sold: Decimal = Decimal(0)
     contribution_pct: Decimal = Decimal(0)
+    bar_total_cash: Decimal = Decimal(0)
+    bar_closed: bool = False
     reassignment_notice: str | None = None
